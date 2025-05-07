@@ -1,17 +1,15 @@
 <#
 .SYNOPSIS
-    Generates a full user report from Active Directory and Entra ID, with Arabic-safe CSV export and timestamped filename.
+    Scalable and memory-efficient script to audit users across Active Directory and Microsoft Entra ID.
 
 .DESCRIPTION
-    This script fetches user details from on-premises Active Directory and Microsoft Entra ID (formerly Azure AD), merges them by username,
-    and exports a unified CSV report to the user's Desktop with the current timestamp. It includes attributes like creation date,
-    last logon date, password last set, and more.
-
-    The output is formatted in UTF-8 with BOM to support Arabic characters. All date fields are formatted as yyyy-MM-dd.
+    Designed for large environments (100K+ users), this script streams user information directly to CSV to avoid memory overload,
+    processes AD and Entra ID users in real-time, avoids large in-memory collections, and logs activity to a transcript file.
 
 .NOTES
     Author: Your Name
     Date: 2025-05-04
+    Compatible: PowerShell 5.1+
 #>
 
 # Load required modules
@@ -19,99 +17,82 @@ Import-Module ActiveDirectory -ErrorAction Stop
 Import-Module Microsoft.Graph.Users -ErrorAction Stop
 
 # Connect to Microsoft Graph
-Write-Progress -Activity "Connecting to Microsoft Graph" -Status "Authenticating..." -PercentComplete 5
+Write-Host "🔄 Connecting to Microsoft Graph..." -ForegroundColor Cyan
 Connect-MgGraph -Scopes "User.Read.All", "Directory.Read.All" -NoWelcome
+Write-Host "✅ Connected to Microsoft Graph.`n" -ForegroundColor Green
 
-# Get all AD users with additional properties
-Write-Progress -Activity "Getting AD Users" -Status "Fetching from on-prem AD..." -PercentComplete 25
-$adUsers = Get-ADUser -Filter * -Properties * | ForEach-Object {
-    [PSCustomObject]@{
-        Username             = $_.SamAccountName
-        DisplayName          = $_.DisplayName
-        Department           = $_.Department
-        Title                = $_.Title
-        Email                = $_.Mail
-        AD_Enabled           = if ($_.Enabled) { 'Enabled' } else { 'Disabled' }
-        AD_Created           = $_.WhenCreated
-        AD_LastLogon         = $_.LastLogonDate
-        AD_WhenChanged       = $_.whenChanged
-        AD_PwdLastSet        = ([datetime]::FromFileTime($_.pwdLastSet))
-        AD_Description       = $_.Description
-        AD_DistinguishedName = $_.DistinguishedName
-    }
-}
-
-# Get all Entra ID users with additional properties
-Write-Progress -Activity "Getting Entra ID Users" -Status "Fetching from Microsoft Entra ID..." -PercentComplete 45
-$entraUsers = Get-MgUser -All -Property DisplayName, UserPrincipalName, Department, JobTitle, Mail, AccountEnabled, CreatedDateTime, SignInActivity | ForEach-Object {
-    [PSCustomObject]@{
-        Username                        = $_.UserPrincipalName.Split("@")[0]
-        DisplayName                     = $_.DisplayName
-        Department                      = $_.Department
-        Title                           = $_.JobTitle
-        Email                           = $_.Mail
-        Entra_Enabled                   = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-        Entra_Created                   = $_.CreatedDateTime
-        Entra_LastInteractiveSignIn     = $_.SignInActivity.LastSignInDateTime
-        Entra_LastNonInteractiveSignIn  = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    }
-}
-
-# Merge users by username
-Write-Progress -Activity "Merging Users" -Status "Combining AD + Entra ID data..." -PercentComplete 70
-$merged = @()
-$allUsernames = ($adUsers.Username + $entraUsers.Username) | Sort-Object -Unique
-$count = 0
-$total = $allUsernames.Count
-
-foreach ($username in $allUsernames) {
-    $count++
-    Write-Progress -Activity "Merging User Data" -Status "$count of $total users" -PercentComplete ([math]::Round(($count / $total) * 25) + 70)
-
-    $ad = $adUsers | Where-Object { $_.Username -eq $username }
-    $entra = $entraUsers | Where-Object { $_.Username -eq $username }
-
-    $merged += [PSCustomObject]@{
-        Username                        = $username
-        InAD                            = if ($ad) { "Yes" } else { "No" }
-        InEntraID                       = if ($entra) { "Yes" } else { "No" }
-        DisplayName                     = $ad.DisplayName ?? $entra.DisplayName
-        Department                      = $ad.Department ?? $entra.Department
-        Title                           = $ad.Title ?? $entra.Title
-        Email                           = $ad.Email ?? $entra.Email
-        AD_Enabled                      = $ad.AD_Enabled
-        Entra_Enabled                   = $entra.Entra_Enabled
-        AD_Created                      = $ad.AD_Created?.ToString("yyyy-MM-dd")
-        Entra_Created                   = $entra.Entra_Created?.ToString("yyyy-MM-dd")
-        AD_LastLogon                    = $ad.AD_LastLogon?.ToString("yyyy-MM-dd")
-        Entra_LastInteractiveSignIn     = $entra.Entra_LastInteractiveSignIn?.ToString("yyyy-MM-dd")
-        Entra_LastNonInteractiveSignIn  = $entra.Entra_LastNonInteractiveSignIn?.ToString("yyyy-MM-dd")
-        AD_WhenChanged                  = $ad.AD_WhenChanged?.ToString("yyyy-MM-dd")
-        AD_PwdLastSet                   = $ad.AD_PwdLastSet?.ToString("yyyy-MM-dd")
-        AD_Description                  = $ad.AD_Description
-        AD_DistinguishedName            = $ad.AD_DistinguishedName
-    }
-}
-
-# Generate timestamped filename on Desktop
-Write-Progress -Activity "Exporting Report" -Status "Saving to Desktop..." -PercentComplete 98
+# Prepare export paths
 $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm"
 $desktopPath = [Environment]::GetFolderPath('Desktop')
+if (-not (Test-Path $desktopPath)) {
+    $desktopPath = "C:\\Temp"
+    if (-not (Test-Path $desktopPath)) { New-Item -Path $desktopPath -ItemType Directory | Out-Null }
+}
 $csvPath = Join-Path $desktopPath "FullUserReport-$timestamp.csv"
-$utf8Bom = New-Object System.Text.UTF8Encoding $true
-
-# Rearranged property order: AD fields first, then Entra fields
-$orderedProps = @(
+$columns = @(
     'Username','DisplayName','Department','Title','Email',
     'InAD','AD_Enabled','AD_Created','AD_LastLogon','AD_WhenChanged','AD_PwdLastSet','AD_Description','AD_DistinguishedName',
     'InEntraID','Entra_Enabled','Entra_Created','Entra_LastInteractiveSignIn','Entra_LastNonInteractiveSignIn'
 )
 
+# Create blank CSV file with headers
+@() | Select-Object $columns | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+
+# Start logging
+$logPath = Join-Path $desktopPath "HybridUserAuditLog-$timestamp.txt"
+Start-Transcript -Path $logPath -Append
+
+# Retrieve all Entra ID users and index by username
+Write-Host "🔎 Fetching Entra ID users..." -ForegroundColor Yellow
+$entraLookup = @{}
+$j = 0
 try {
-    [System.IO.File]::WriteAllLines($csvPath, ($merged | Select-Object $orderedProps | ConvertTo-Csv -NoTypeInformation), $utf8Bom)
-    Write-Host "`nReport saved to:`n$csvPath" -ForegroundColor Green
-    # Step 6: Open folder
-    Start-Process "explorer.exe" $desktopPath
+    Get-MgUser -All -Property DisplayName, UserPrincipalName, Department, JobTitle, Mail, AccountEnabled, CreatedDateTime, SignInActivity | ForEach-Object {
+        $j++
+        $username = ($_.UserPrincipalName -split "@")[0].ToLower()
+        $entraLookup[$username] = $_
+        Write-Host "[EntraID] $j - $username : $($_.DisplayName)" -ForegroundColor DarkYellow
+    }
+    Write-Host "✅ Finished loading Entra ID users.`n" -ForegroundColor Green
 } catch {
-    Write-Host "Failed to save report. Error: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "❌ Failed to fetch Entra ID users: $($_.Exception.Message)" -ForegroundColor Red
 }
+
+# Process AD users and merge on-the-fly
+Write-Host "🔁 Processing AD users and writing merged report..." -ForegroundColor Cyan
+
+$i = 0
+Get-ADUser -Filter * -Properties * -ResultPageSize 1000 -ResultSetSize $null | ForEach-Object {
+    $i++
+    $adUser = $_
+    $username = $adUser.SamAccountName.ToLower()
+    $entraUser = $entraLookup[$username]
+
+    $record = [PSCustomObject]@{
+        Username                        = $username
+        InAD                            = "Yes"
+        InEntraID                       = if ($entraUser) { "Yes" } else { "No" }
+        DisplayName                     = if ($adUser.DisplayName) { $adUser.DisplayName } elseif ($entraUser) { $entraUser.DisplayName } else { "" }
+        Department                      = if ($adUser.Department) { $adUser.Department } elseif ($entraUser) { $entraUser.Department } else { "" }
+        Title                           = if ($adUser.Title) { $adUser.Title } elseif ($entraUser) { $entraUser.JobTitle } else { "" }
+        Email                           = if ($adUser.Mail) { $adUser.Mail } elseif ($entraUser) { $entraUser.Mail } else { "" }
+        AD_Enabled                      = if ($adUser.Enabled) { 'Enabled' } else { 'Disabled' }
+        Entra_Enabled                   = if ($entraUser.AccountEnabled) { 'Enabled' } else { 'Disabled' }
+        AD_Created                      = $adUser.WhenCreated.ToString("yyyy-MM-dd")
+        Entra_Created                   = if ($entraUser.CreatedDateTime) { $entraUser.CreatedDateTime.ToString("yyyy-MM-dd") } else { "" }
+        AD_LastLogon                    = if ($adUser.LastLogonDate) { $adUser.LastLogonDate.ToString("yyyy-MM-dd") } else { "" }
+        Entra_LastInteractiveSignIn     = if ($entraUser.SignInActivity.LastSignInDateTime) { $entraUser.SignInActivity.LastSignInDateTime.ToString("yyyy-MM-dd") } else { "" }
+        Entra_LastNonInteractiveSignIn  = if ($entraUser.SignInActivity.LastNonInteractiveSignInDateTime) { $entraUser.SignInActivity.LastNonInteractiveSignInDateTime.ToString("yyyy-MM-dd") } else { "" }
+        AD_WhenChanged                  = if ($adUser.whenChanged) { $adUser.whenChanged.ToString("yyyy-MM-dd") } else { "" }
+        AD_PwdLastSet                   = if ($adUser.pwdLastSet) { ([datetime]::FromFileTime($adUser.pwdLastSet)).ToString("yyyy-MM-dd") } else { "" }
+        AD_Description                  = $adUser.Description
+        AD_DistinguishedName            = $adUser.DistinguishedName
+    }
+
+    $record | Select-Object $columns | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Append
+    Write-Host "[✔] $i - $username : $($record.DisplayName)" -ForegroundColor Magenta
+}
+
+Stop-Transcript
+Write-Host "`n✅ Report saved to: $csvPath" -ForegroundColor Green
+Start-Process "explorer.exe" -ArgumentList (Split-Path $csvPath)
