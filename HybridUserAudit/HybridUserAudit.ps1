@@ -7,9 +7,9 @@
     processes AD and Entra ID users in real-time, avoids large in-memory collections, and logs activity to a transcript file.
 
 .NOTES
-    Author: Your Name
+    Author  : Mohammad Abdulkader Omar
+    Website : momar.tech
     Date: 2025-05-04
-    Compatible: PowerShell 5.1+
 #>
 
 # Load required modules
