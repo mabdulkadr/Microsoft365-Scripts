@@ -1,7 +1,7 @@
 
 # Guest User Management Scripts
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![PowerShell](https://img.shields.io/badge/powershell-7.0%2B-blue.svg)
+![PowerShell](https://img.shields.io/badge/powershell-5.1%2B-blue.svg)
 ![Version](https://img.shields.io/badge/version-1.10-green.svg)
 
 A PowerShell toolkit for Microsoft Entra ID (Azure AD) guest user lifecycle management:  
