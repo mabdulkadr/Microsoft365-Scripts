@@ -90,7 +90,7 @@ admin,admin_upm.xyz.com#EXT#@contoso.onmicrosoft.com
 
 ```powershell
 # Run in a PowerShell window with Microsoft.Graph module installed
-.\Remove-GuestUsersFromCSV.ps1.ps1
+.\Remove-GuestUsersFromCSV.ps1
 ```
 
 * Select your CSV file when prompted.
