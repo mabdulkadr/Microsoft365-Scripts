@@ -1,5 +1,5 @@
 
-# GuestUserManagement Toolkit
+# Guest User Management Scripts
 
 A PowerShell toolkit for Microsoft Entra ID (Azure AD) guest user lifecycle management:  
 - **Export** detailed reports of guest users and their memberships  
