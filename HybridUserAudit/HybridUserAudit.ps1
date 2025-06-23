@@ -122,7 +122,7 @@ Get-ADUser -Filter * -Properties * | ForEach-Object {
 
     # Append to CSV
     $record | Select-Object $columns | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Append
-    Write-Host "[✔] $i - $username : $($record.DisplayName)" -ForegroundColor Magenta
+    Write-Host "[✔] $i - $username : $($record.DisplayName)" -ForegroundColor Green
 }
 
 # ===============================
