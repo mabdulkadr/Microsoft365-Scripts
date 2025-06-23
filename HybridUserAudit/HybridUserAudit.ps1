@@ -92,37 +92,39 @@ try {
 # ===============================
 Write-Host "`n🔎 Fetching AD users..." -ForegroundColor Yellow
 $i = 0
-Get-ADUser -Filter * -Properties * | ForEach-Object {
-    $adUser   = $_
-    $username = $adUser.SamAccountName.ToLower()
-    $entra    = $entraUsers[$username]
-    $i++
+$prefixes = @('a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9')
+foreach ($prefix in $prefixes) {
+    Write-Host "🔍 Fetching AD users starting with '$prefix'..." -ForegroundColor Yellow
+    Get-ADUser -LDAPFilter "(sAMAccountName=$prefix*)" -Properties * | ForEach-Object {
+        $i++
+        $adUser = $_
+        $username = $adUser.SamAccountName.ToLower()
+        $entraUser = $entraLookup[$username]
 
-    # Construct a combined user record from AD and Entra
-    $record = [PSCustomObject]@{
-        Username                        = $username
-        InAD                            = "Yes"
-        InEntraID                       = if ($entra) { "Yes" } else { "No" }
-        DisplayName                     = if ($adUser.DisplayName) { $adUser.DisplayName } elseif ($entra) { $entra.DisplayName } else { "" }
-        Department                      = if ($adUser.Department) { $adUser.Department } elseif ($entra) { $entra.Department } else { "" }
-        Title                           = if ($adUser.Title) { $adUser.Title } elseif ($entra) { $entra.JobTitle } else { "" }
-        Email                           = if ($adUser.Mail) { $adUser.Mail } elseif ($entra) { $entra.Mail } else { "" }
-        AD_Enabled                      = if ($adUser.Enabled) { 'Enabled' } else { 'Disabled' }
-        AD_Created                      = $adUser.WhenCreated.ToString("yyyy-MM-dd")
-        AD_LastLogon                    = if ($adUser.LastLogonDate) { $adUser.LastLogonDate.ToString("yyyy-MM-dd HH:mm") } else { "" }
-        AD_WhenChanged                  = if ($adUser.WhenChanged) { $adUser.WhenChanged.ToString("yyyy-MM-dd") } else { "" }
-        AD_PwdLastSet                   = if ($adUser.PwdLastSet) { ([datetime]::FromFileTime($adUser.PwdLastSet)).ToString("yyyy-MM-dd") } else { "" }
-        AD_Description                  = $adUser.Description
-        AD_DistinguishedName            = $adUser.DistinguishedName
-        Entra_Enabled                   = if ($entra.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-        Entra_Created                   = if ($entra.CreatedDateTime) { $entra.CreatedDateTime.ToString("yyyy-MM-dd") } else { "" }
-        Entra_LastInteractiveSignIn     = if ($entra.SignInActivity.LastSignInDateTime) { $entra.SignInActivity.LastSignInDateTime.ToString("yyyy-MM-dd HH:mm") } else { "" }
-        Entra_LastNonInteractiveSignIn  = if ($entra.SignInActivity.LastNonInteractiveSignInDateTime) { $entra.SignInActivity.LastNonInteractiveSignInDateTime.ToString("yyyy-MM-dd HH:mm") } else { "" }
+        $record = [PSCustomObject]@{
+            Username                        = $username
+            InAD                            = "Yes"
+            InEntraID                       = if ($entraUser) { "Yes" } else { "No" }
+            DisplayName                     = if ($adUser.DisplayName) { $adUser.DisplayName } elseif ($entraUser) { $entraUser.DisplayName } else { "" }
+            Department                      = if ($adUser.Department) { $adUser.Department } elseif ($entraUser) { $entraUser.Department } else { "" }
+            Title                           = if ($adUser.Title) { $adUser.Title } elseif ($entraUser) { $entraUser.JobTitle } else { "" }
+            Email                           = if ($adUser.Mail) { $adUser.Mail } elseif ($entraUser) { $entraUser.Mail } else { "" }
+            AD_Enabled                      = if ($adUser.Enabled) { 'Enabled' } else { 'Disabled' }
+            Entra_Enabled                   = if ($entraUser.AccountEnabled) { 'Enabled' } else { 'Disabled' }
+            AD_Created                      = $adUser.WhenCreated.ToString("yyyy-MM-dd")
+            Entra_Created                   = if ($entraUser.CreatedDateTime) { $entraUser.CreatedDateTime.ToString("yyyy-MM-dd") } else { "" }
+            AD_LastLogon                    = if ($adUser.LastLogonDate) { $adUser.LastLogonDate.ToString("yyyy-MM-dd") } else { "" }
+            Entra_LastInteractiveSignIn     = if ($entraUser.SignInActivity.LastSignInDateTime) { $entraUser.SignInActivity.LastSignInDateTime.ToString("yyyy-MM-dd") } else { "" }
+            Entra_LastNonInteractiveSignIn  = if ($entraUser.SignInActivity.LastNonInteractiveSignInDateTime) { $entraUser.SignInActivity.LastNonInteractiveSignInDateTime.ToString("yyyy-MM-dd") } else { "" }
+            AD_WhenChanged                  = if ($adUser.whenChanged) { $adUser.whenChanged.ToString("yyyy-MM-dd") } else { "" }
+            AD_PwdLastSet                   = if ($adUser.pwdLastSet) { ([datetime]::FromFileTime($adUser.pwdLastSet)).ToString("yyyy-MM-dd") } else { "" }
+            AD_Description                  = $adUser.Description
+            AD_DistinguishedName            = $adUser.DistinguishedName
+        }
+
+        $record | Select-Object $columns | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Append
+        Write-Host "[✔] $i - $username : $($record.DisplayName)" -ForegroundColor Magenta
     }
-
-    # Append to CSV
-    $record | Select-Object $columns | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Append
-    Write-Host "[✔] $i - $username : $($record.DisplayName)" -ForegroundColor Green
 }
 
 # ===============================
