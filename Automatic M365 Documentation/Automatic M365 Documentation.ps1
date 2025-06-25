@@ -16,8 +16,8 @@ Ensure the Azure AD application has appropriate permissions for the Microsoft Gr
 
 # Define credentials
 
-$TenantId		 = '<Your-Tenant-ID>'
-$ClientId		 = '<Your-App-ID>'
+$TenantId		     = '<Your-Tenant-ID>'
+$ClientId		     = '<Your-App-ID>'
 $ClientSecret		 = '<Your-App-Secret>'
 $OutputDirectory	 = "C:\Temp"
 
