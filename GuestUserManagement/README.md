@@ -1,8 +1,5 @@
 
-# Guest User Management Scripts
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![PowerShell](https://img.shields.io/badge/powershell-5.1%2B-blue.svg)
-![Version](https://img.shields.io/badge/version-1.10-green.svg)
+# GuestUserManagement Toolkit
 
 A PowerShell toolkit for Microsoft Entra ID (Azure AD) guest user lifecycle management:  
 - **Export** detailed reports of guest users and their memberships  
@@ -90,7 +87,7 @@ m.abdelkader,m.abdelkader_upm.xyz.com#EXT#@abc.onmicrosoft.com
 
 ```powershell
 # Run in a PowerShell window with Microsoft.Graph module installed
-.\Remove-GuestUsersFromCSV.ps1
+.\Remove-GuestUsersFromCSV.ps1.ps1
 ```
 
 * Select your CSV file when prompted.
