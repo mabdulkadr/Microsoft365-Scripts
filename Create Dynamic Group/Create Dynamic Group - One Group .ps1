@@ -43,13 +43,13 @@ Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
 # =====================
 
 # Azure AD Tenant ID (replace with your actual Tenant ID)
-$tenantID = "c2b04da6-8487-41cc-8803-90321048a772"
+$tenantID = "xxxxxxxx"
 
 # Azure AD App Registration Client ID (replace with your actual Client ID)
-$appID = "6c70c0c3-e3a6-489c-973e-51e8138540f9"
+$appID = "xxxxxxxxxxx"
 
 # Azure AD App Registration Client Secret (replace with your actual Client Secret)
-$appSecretPlain = "Uoj8Q~1_acd.7WU4Ol3vOczrfeYQbdHR_mzhTb6n"
+$appSecretPlain = "xxxxxxxxx"
 $appSecret = ConvertTo-SecureString $appSecretPlain -AsPlainText -Force
 
 # Group Properties
