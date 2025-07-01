@@ -1,31 +1,46 @@
-﻿# ========================================================================================
-# Enhanced Script to Create Dynamic Azure AD Groups Based on On-Premises OU Names
-# ========================================================================================
-# Description:
-# This script connects to both On-Premises Active Directory and Azure Active Directory (AAD),
-# retrieves all OU names from On-Prem AD, and creates corresponding dynamic groups in AAD
-# with a prefix "Devices-". It ensures that groups are only created if they do not already exist.
-# The script includes robust error handling, logging, and automatic module installation.
-# ========================================================================================
+﻿<#
+.SYNOPSIS
+    Creates dynamic Azure AD groups based on on-premises Active Directory OU names.
 
-# Azure AD Tenant ID (replace with your actual Tenant ID)
-$tenantID = "xxxxxxx"
+.DESCRIPTION
+    This script connects to both On-Premises Active Directory and Azure Active Directory (AAD) using Microsoft Graph.
+    It retrieves all OU names from the local AD and creates corresponding dynamic AAD groups with the prefix "Devices-".
 
-# Azure AD App Registration Client ID (replace with your actual Client ID)
-$appID = "xxxxxxxxx"
+    Each group is created with a membership rule that targets devices whose `onPremisesDistinguishedName` contains the OU name.
+    The script ensures that no duplicate groups are created by checking for existing group names before creation.
 
-# Azure AD App Registration Client Secret (replace with your actual Client Secret as plain text)
-$appSecret = "xxxxxxxxxx"
+    Additional features include:
+    - Robust error handling and logging
+    - Automatic installation of required PowerShell modules
+    - Support for secure app-based authentication
+
+.NOTES
+    - Requires connectivity to both On-Prem AD and Microsoft Graph.
+    - App registration must have Group.ReadWrite.All and Directory.Read.All Graph permissions.
+    - The script only handles dynamic group creation based on OU name patterns.
+
+.EXAMPLE
+    .\Create-DynamicGroups-FromOU.ps1
+
+.NOTES
+    Author  : Mohammad Abdulkader Omar
+    Website : momar.tech
+    Date    : 2025-07-01
+#>
+
+# ====================== Configuration Section ======================
+
+$tenantID       = "xxxxxxxxxxxxxxxxxxxxxxxx"  # replace with your actual Tenant ID
+$appID          = "xxxxxxxxxxxxxxxxxxxxxxxx"  # replace with your actual Client ID
+$appSecret      = "xxxxxxxxxxxxxxxxxxxxxxxx"  # replace with your actual Client Secret as plain text
 
 # Prefix for dynamic group names
 $groupPrefix = "Devices - "
 
-# ======================
-# Logging Configuration
-# ======================
+# ====================== Logging Configuration ======================
 
 # Path to the log file
-$logFilePath = "C:\Scripts\Logs\CreateDynamicGroups.log"
+$logFilePath = "C:\CreateDynamicGroups.log"
 
 # Ensure the log directory exists
 $logDirectory = Split-Path -Path $logFilePath -Parent
@@ -59,9 +74,7 @@ function Write-Log {
     Add-Content -Path $logFilePath -Value $logMessage
 }
 
-# ======================
-# Function Definitions
-# ======================
+# ====================== Function Definitions ======================
 
 # Function to ensure a PowerShell module is installed and imported
 function Ensure-Module {
@@ -202,9 +215,7 @@ function Create-DynamicAzureADGroup {
     }
 }
 
-# ======================
-# Script Execution
-# ======================
+# ====================== Script Execution ======================
 
 # Start Logging
 Write-Log "======================" -Level "INFO"

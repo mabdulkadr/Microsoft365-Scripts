@@ -27,15 +27,15 @@
 Param (
     [int]$BatchSize = 500,
     [string]$GroupNamePrefix = "Devices-group",
-    [int]$NamePadding = 2,  # Number of digits in group numbering
-    [switch]$EnableLogging, # Enable logging to a file
-    [string]$LogFilePath = "C:\CreateStaticGroup\GroupCreationLog.txt"
+    [int]$NamePadding = 2,    # Number of digits in group numbering
+    [switch]$EnableLogging,   # Enable logging to a file
+    [string]$LogFilePath = "C:\GroupCreationLog.txt"
 )
 
 # Automatically Connect to Microsoft Graph using App-based Authentication
-$tenantID      = "xxxxxx"
-$appID         = "xxxxxxx"  #ClientID
-$appSecret     = "xxxxxxx"  #Client Secret
+$tenantID      = "xxxxxxxxxxxxxxxxxxxx"  # replace with your actual Tenant ID
+$appID         = "xxxxxxxxxxxxxxxxxxxx"  # replace with your actual App ID
+$appSecret     = "xxxxxxxxxxxxxxxxxxxx"  # replace with your actual Client Secret as plain text
 
 # Function to log messages with timestamps and color-coded output
 Function Log-Message {

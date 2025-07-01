@@ -12,7 +12,7 @@
     Original scripts by: Mohammed Omar
 #>
 
-# ========== GLOBAL SETTINGS ==========
+# ========================= GLOBAL SETTINGS =========================
 $ReportPath = "C:\ADReports"
 $NowString = Get-Date -Format "yyyy-MM-dd_HH-mm"
 $CSS = @"
@@ -65,7 +65,7 @@ try {
 }
 If (-not (Test-Path $ReportPath)) { New-Item -Path $ReportPath -ItemType Directory | Out-Null }
 
-# ========== UTILITIES ==========
+# ========================= UTILITIES =========================
 function Write-Header($text) {
     Write-Host ""
     Write-Host ("=" * 65) -ForegroundColor Cyan
@@ -104,7 +104,7 @@ function Prompt-OpenReport($path) {
     }
 }
 
-# ========== REPORT FUNCTIONS ==========
+# ========================= REPORT FUNCTIONS =========================
 
 function Show-CompleteComputerObjectReport {
     Write-Header "Complete Computer Object Report"
@@ -219,7 +219,7 @@ function Run-AllReports {
     Write-Host "`nAll reports have been generated." -ForegroundColor Green
 }
 
-# ========== MAIN MENU ==========
+# ========================= MAIN MENU =========================
 function Show-Menu {
     Clear-Host
     Write-Host ""
