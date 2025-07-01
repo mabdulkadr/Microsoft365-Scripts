@@ -1,24 +1,34 @@
-﻿# ========================================================================================
-# Script to Create Multiple Dynamic Azure AD Groups Based on Names from a CSV File
-# ========================================================================================
-# Description:
-# This script connects to Microsoft Graph using either app-based or user-based authentication,
-# reads group details from a CSV file, and creates dynamic Azure Active Directory (AAD) groups
-# based on the device display name and other criteria specified in the CSV.
-# ========================================================================================
+﻿<#
+.SYNOPSIS
+    Creates multiple dynamic Azure AD groups from a CSV input.
 
-# =====================
-# Configuration Section
-# =====================
+.DESCRIPTION
+    This script connects to Microsoft Graph using either app-based (client credentials) or user-based (delegated) authentication.
+    It reads a CSV file containing group details (e.g., group name, description, and membership rule criteria) and automatically
+    creates dynamic Azure Active Directory (AAD) groups based on device display names or other specified properties.
 
-# Azure AD Tenant ID (replace with your actual Tenant ID)
-$tenantID = "xxxxxx"
+    Dynamic membership rules are generated per the CSV input, enabling automated and scalable group creation across an Intune-managed environment.
 
-# Azure AD App Registration Client ID (replace with your actual Client ID)
-$appID = "xxxxxxxxxx"
+.NOTES
+    - Ensure the app registration has the necessary Microsoft Graph permissions for Group.ReadWrite.All and Directory.Read.All.
+    - The CSV must include required columns like GroupName, Description, and Rule (or equivalent).
+    - This script only creates **dynamic** groups; it does not support static group creation.
 
-# Azure AD App Registration Client Secret (replace with your actual Client Secret as plain text)
-$appSecretPlain = "xxxxxxxxxxx"
+.EXAMPLE
+    .\Create-DynamicAzureADGroupsFromCSV.ps1 -CsvPath "C:\Groups\DynamicGroups.csv"
+
+.NOTES
+    Author  : Mohammad Abdulkader Omar
+    Website : momar.tech
+    Date    : 2025-07-01
+#>
+
+
+# ===================== Configuration Section =====================
+
+$tenantID       = "xxxxxxxxxxxxxxxxxxxxxxxx"  # replace with your actual Tenant ID
+$appID          = "xxxxxxxxxxxxxxxxxxxxxxxx"  # replace with your actual Client ID
+$appSecretPlain = "xxxxxxxxxxxxxxxxxxxxxxxx"  # replace with your actual Client Secret as plain text
 
 # Permission scopes for user-based authentication (optional if not using app-based auth)
 $scopes = "https://graph.microsoft.com/.default"
@@ -26,9 +36,7 @@ $scopes = "https://graph.microsoft.com/.default"
 # Path to the CSV file containing group information
 $csvFilePath = "C:\Groups.csv"  # Update with your actual path
 
-# ======================
-# Function Definitions
-# ======================
+# ====================== Function Definitions ======================
 
 # Function to connect to Microsoft Graph
 function Connect-ToGraph {
@@ -137,9 +145,7 @@ function Create-DynamicGroup {
     }
 }
 
-# ======================
-# Script Execution
-# ======================
+# ====================== Script Execution ======================
 
 # Step 1: Connect to Microsoft Graph using app-based or user-based authentication
 Connect-ToGraph -Tenant $tenantID -AppId $appID -AppSecret $appSecretPlain -Scopes $scopes

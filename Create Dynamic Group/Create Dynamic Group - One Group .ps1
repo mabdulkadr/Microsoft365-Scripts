@@ -1,16 +1,47 @@
-﻿# ========================================================================================
-# Script to Create Dynamic Azure AD Group Based on Device Names
-# ========================================================================================
-# Description:
-# This script connects to Microsoft Graph using a service principal, creates a dynamic
-# Azure Active Directory (AAD) group where membership is based on the device display name
-# containing a specific string (e.g., 'it-op'). The script includes error handling,
-# secure credential management, and formatted output.
-# ========================================================================================
+﻿<#
+.SYNOPSIS
+    Creates a dynamic Azure AD group based on a keyword match in device display names.
 
-# =====================
-# Module Installation Check
-# =====================
+.DESCRIPTION
+    This script connects to Microsoft Graph using app-based authentication (service principal)
+    and creates a dynamic Azure Active Directory (AAD) group whose membership is determined
+    by a rule targeting device display names that contain a specified keyword (e.g., 'it-op').
+
+    The script includes secure credential handling, structured error management, and outputs
+    a summary of the group creation process. It is ideal for scenarios where devices follow
+    a naming convention and need to be dynamically grouped in Intune or Entra ID.
+
+.NOTES
+    - Requires Microsoft Graph App permissions: Group.ReadWrite.All, Directory.Read.All.
+    - Only creates dynamic groups; devices are evaluated via rule-based membership.
+    - Ensure the app secret is stored securely (avoid hardcoding).
+    - Supports optional logging and formatted console output.
+
+.EXAMPLE
+    .\Create-DynamicGroup-ByDeviceName.ps1 -Keyword 'it-op'
+
+.NOTES
+    Author  : Mohammad Abdulkader Omar
+    Website : momar.tech
+    Date    : 2025-07-01
+#>
+
+# ===================== Configuration Section =====================
+
+$tenantID       = "xxxxxxxxxxxxxxxxxxxxxxxx"  # replace with your actual Tenant ID
+$appID          = "xxxxxxxxxxxxxxxxxxxxxxxx"  # replace with your actual Client ID
+$appSecretPlain = "xxxxxxxxxxxxxxxxxxxxxxxx"  # replace with your actual Client Secret as plain text
+
+# Group Properties
+$groupName = "IT-Operations Devices"                            # Name of the new dynamic group
+$groupDescription = "Dynamic group for devices with 'it-op' in the display name" # Description of the group
+$mailNickname = $groupName.Replace(" ", "").ToLower()           # Mail nickname for the group
+
+# Dynamic Membership Rule for devices whose displayName contains 'it-op'
+$membershipRule = "(device.displayName -contains 'it-op')"      # Adjusted rule for devices
+
+$appSecret = ConvertTo-SecureString $appSecretPlain -AsPlainText -Force
+# ===================== Module Installation Check =====================
 
 # Define the submodules required for the script
 $requiredModules = @("Microsoft.Graph.Groups", "Microsoft.Graph.Authentication")
@@ -38,31 +69,7 @@ foreach ($module in $requiredModules) {
 Import-Module Microsoft.Graph.Groups -ErrorAction Stop
 Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
 
-# =====================
-# Configuration Section
-# =====================
-
-# Azure AD Tenant ID (replace with your actual Tenant ID)
-$tenantID = "xxxxxxxx"
-
-# Azure AD App Registration Client ID (replace with your actual Client ID)
-$appID = "xxxxxxxxxxx"
-
-# Azure AD App Registration Client Secret (replace with your actual Client Secret)
-$appSecretPlain = "xxxxxxxxx"
-$appSecret = ConvertTo-SecureString $appSecretPlain -AsPlainText -Force
-
-# Group Properties
-$groupName = "IT-Operations Devices"                            # Name of the new dynamic group
-$groupDescription = "Dynamic group for devices with 'it-op' in the display name" # Description of the group
-$mailNickname = $groupName.Replace(" ", "").ToLower()           # Mail nickname for the group
-
-# Dynamic Membership Rule for devices whose displayName contains 'it-op'
-$membershipRule = "(device.displayName -contains 'it-op')"      # Adjusted rule for devices
-
-# ======================
-# Function Definitions
-# ======================
+# ====================== Function Definitions ======================
 
 # Function to connect to Microsoft Graph
 function Connect-ToGraph {
@@ -116,9 +123,7 @@ function Create-DynamicGroup {
     }
 }
 
-# ======================
-# Script Execution
-# ======================
+# ====================== Script Execution ======================
 
 # Step 1: Connect to Microsoft Graph
 Connect-ToGraph
