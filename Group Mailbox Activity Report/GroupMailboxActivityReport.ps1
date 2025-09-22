@@ -76,20 +76,20 @@ $CertificateThumbprint = "<your-certificate-thumbprint>"
 $Organization          = "<yourdomain.onmicrosoft.com>"   # or custom primary SMTP domain
 
 # ================== SMTP settings ==================
-$MailFrom   = "sender@domain.com"
-$MailTo     = "recipient1@domain.com, recipient2@domain.com"
-$MailCc     = ""
-$MailBcc    = ""
-$SmtpServer = "smtp.office365.com"
-$SmtpPort   = 587
-$User       = $MailFrom
-$Password   = ConvertTo-SecureString "<smtp-password-or-app-password>" -AsPlainText -Force
-$Credential = New-Object System.Management.Automation.PSCredential ($User, $Password)
+$MailFrom    = "sender@domain.com"
+$MailTo      = "recipient1@domain.com, recipient2@domain.com"
+$MailCc      = ""
+$MailBcc     = ""
+$SmtpServer  = "smtp.office365.com"
+$SmtpPort    = 587
+$User        = $MailFrom
+$Password    = ConvertTo-SecureString "<smtp-password-or-app-password>" -AsPlainText -Force
+$Credential  = New-Object System.Management.Automation.PSCredential ($User, $Password)
 
 # ================== Output ==================
-$OutDir   = "C:\Reports"
-$CsvPath  = Join-Path $OutDir "Group_Activity_Report.csv"
-$HtmlPath = Join-Path $OutDir "Group_Activity_Report.html"
+$OutDir            = "C:\Reports"
+$CsvPath           = Join-Path $OutDir "Group_Activity_Report.csv"
+$HtmlPath          = Join-Path $OutDir "Group_Activity_Report.html"
 $ReportTitle       = "Group Mailbox Activity Report"
 $ReportDescription = "Mailbox activity summary (7/30/90 days) for the selected groups."
 
