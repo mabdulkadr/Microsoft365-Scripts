@@ -1,17 +1,18 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Get-PasswordExpiryReport - Microsoft 365 password expiry reports via Microsoft Graph
 
 .SYNOPSIS
-    This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
+    Export Office 365 users last password change date and expiry date using Microsoft Graph.
 
 .DESCRIPTION
-    - Retrieves user sign-in data from Microsoft Graph API.
-    - Identifies inactive users based on interactive and non-interactive sign-ins.
-    - Filters users based on multiple criteria (enabled users, disabled users, external users, etc.).
-    - Exports results into a properly formatted CSV file with UTF-8 encoding.
-    - Automatically installs the required Microsoft Graph PowerShell module if missing.
-    - Scheduler-friendly for automated execution.
+    Export Office 365 Users' Last Password Change Date and expiry date using MS Graph.
+    A single script generates multiple password reports: all users with last password
+    change and expiry date, users with password never expires, expired passwords,
+    soon-to-expire passwords, and recent password changers. Covers all or licensed
+    users, all or sign-in enabled users. Uses MS Graph PowerShell and installs the
+    MS Graph PowerShell SDK upon confirmation if missing. Supports certificate-based
+    authentication and MFA-enabled accounts. Exports output to CSV.
 
 .TAGS
     Identity,M365,Reporting
@@ -20,7 +21,7 @@
     Windows 10/11/Server 2019+
 
 .PERMISSIONS
-    User.Read.All, AuditLog.Read.All
+    User.Read.All, Directory.Read.All
 
 .AUTHOR
     AI Generated
@@ -35,12 +36,12 @@
     2026-09-16
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
-    Runs an inactivity report for users inactive more than 90 days.
+    .\Get-PasswordExpiryReport.ps1 -PwdNeverExpires
+    Exports users with passwords set to never expire.
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
-    Lists enabled users who never logged in (provisioning cleanup).
+    .\Get-PasswordExpiryReport.ps1 -SoonToExpire 14 -LicensedUserOnly
+    Exports licensed users whose passwords expire within 14 days.
 
 .NOTES
     Part of Microsoft365-Scripts toolkit - Identity,M365,Reporting
@@ -50,19 +51,19 @@
 
 #Requires -Version 5.1
 
-Param
-(
-    [int]$InactiveDays,
-    [int]$InactiveDays_NonInteractive,
-    [switch]$ReturnNeverLoggedInUser,
+Param 
+( 
+    [Parameter(Mandatory = $false)] 
+    [switch]$PwdNeverExpires, 
+    [switch]$PwdExpired, 
+    [switch]$LicensedUserOnly, 
+    [int]$SoonToExpire, 
+    [int]$RecentPwdChanges,
     [switch]$EnabledUsersOnly,
-    [switch]$DisabledUsersOnly,
-    [switch]$ExternalUsersOnly,
-    [switch]$CreateSession,
     [string]$TenantId,
     [string]$ClientId,
     [string]$CertificateThumbprint
-)
+) 
 
 $ErrorActionPreference = 'Stop'
 
@@ -70,7 +71,7 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'GetM365InactiveUserReport'
+$SolutionName = 'Get-PasswordExpiryReport'
 $ScriptMode   = 'run'
 
 # ============================================================================
@@ -192,123 +193,260 @@ $null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type
 Write-Banner
 
 # ============================================================================
-# GRAPH CONNECTION - installs the Beta module on confirmation, then signs in.
+# GRAPH CONNECTION - prompted Beta-module install, then cert or delegated sign-in.
 # ============================================================================
 
-# Ensures the Graph Beta module exists (prompted install) and connects; honors -CreateSession.
-Function Connect_MgGraph
-{
-    # Check if the Microsoft Graph Beta module is installed
-    $MsGraphBetaModule = Get-Module Microsoft.Graph.Beta -ListAvailable
-    if ($MsGraphBetaModule -eq $null)
+$MsGraphBetaModule =  Get-Module Microsoft.Graph.Beta -ListAvailable
+if($MsGraphBetaModule -eq $null)
+{ 
+    Write-Log -Message "Important: Microsoft Graph Beta module is unavailable. It is mandatory to have this module installed in the system to run the script successfully." -Level 'WARNING'
+    $confirm = Read-Host Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No  
+    if($confirm -match "[yY]") 
     { 
-        Write-Log -Message "⚠️ Microsoft Graph Beta module is missing. It must be installed to run the script successfully." -Level 'WARNING'
-        $confirm = Read-Host "Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No"  
-        if ($confirm -match "[yY]") 
-        { 
-            Write-Log -Message "📦 Installing Microsoft Graph Beta module..." -Level 'INFO'
-            Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
-            Write-Log -Message "✅ Microsoft Graph Beta module installed successfully." -Level 'SUCCESS'
-        } 
-        else
-        { 
-            Write-Log -Message "❌ Exiting. Microsoft Graph Beta module is required for this script." -Level 'ERROR'
-            Exit 
-        } 
+        Write-Log -Message "Installing Microsoft Graph Beta module..." -Level 'INFO'
+        Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
+        Write-Log -Message "Microsoft Graph Beta module is installed in the machine successfully" -Level 'INFO'
+    } 
+    else
+    { 
+        Write-Log -Message "Exiting. `nNote: Microsoft Graph Beta module must be available in your system to run the script" -Level 'ERROR'
+        Exit 
+    } 
+}
+Write-Log -Message "Connecting to MS Graph PowerShell..." -Level 'INFO'
+if(($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
+{  
+    Connect-MgGraph  -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint -ErrorAction SilentlyContinue -ErrorVariable ConnectionError|Out-Null
+    if($ConnectionError -ne $null)
+    {    
+        Write-Log -Message "$ConnectionError" -Level 'ERROR'
+        Exit
     }
-    
-    # Disconnect any existing Microsoft Graph sessions if requested
-    if ($CreateSession.IsPresent)
+}
+else
+{
+    Connect-MgGraph -Scopes "Directory.Read.All"  -ErrorAction SilentlyContinue -Errorvariable ConnectionError |Out-Null
+    if($ConnectionError -ne $null)
     {
-        Disconnect-MgGraph
+        Write-Log -Message "$ConnectionError" -Level 'ERROR'
+        Exit
     }
-    
-    # Connecting to Microsoft Graph
-    Write-Log -Message "🔗 Connecting to Microsoft Graph..." -Level 'INFO'
-    if (($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint 
+}
+
+
+$UserCount = 0 
+$PrintedUser = 0 
+$Result = ""
+$PwdPolicy=@{}
+#Output file declaration 
+$Location = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
+$ExportCSV = "$Location\PasswordExpiryReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm-ss` tt).ToString()).csv"
+$htmlRows = @()
+
+#Getting Password policy for the domain
+$Domains = Get-MgBetaDomain   #-Status Verified
+foreach($Domain in $Domains)
+{ 
+    #Check for federated domain
+    if($Domain.AuthenticationType -eq "Federated")
+    {
+        $PwdValidity = 0
     }
     else
     {
-        Connect-MgGraph -Scopes "User.Read.All", "AuditLog.read.All"  
+        $PwdValidity = $Domain.PasswordValidityPeriodInDays
+        if($PwdValidity -eq $null)
+        {
+            $PwdValidity = 90
+        }
+    }
+    $PwdPolicy.Add($Domain.Id,$PwdValidity)
+}
+Write-Log -Message "Generating M365 users' password expiry report..." -Level 'INFO'
+#Loop through each user 
+Get-MgBetaUser -All -Property DisplayName,UserPrincipalName,LastPasswordChangeDateTime,PasswordPolicies,AssignedLicenses,AccountEnabled,SigninActivity | ForEach-Object { 
+    $UPN = $_.UserPrincipalName
+    $DisplayName = $_.DisplayName
+    [boolean]$Federated = $false
+    $UserCount++
+    Write-Progress -Activity "`n     Processed user count: $UserCount "`n"  Currently Processing: $DisplayName"
+    #Remove external users
+    if($UPN -like "*#EXT#*")
+    {
+        return
+    }
+    $PwdLastChange = $_.LastPasswordChangeDateTime
+    $PwdPolicies = $_.PasswordPolicies
+    $LicenseStatus = $_.AssignedLicenses
+    $LastSignInDate=$_.SignInActivity.LastSignInDateTime
+    #Calculate Inactive days
+    if($LastSignInDate -eq $null)
+    { 
+     $LastSignInDate="Never Logged-in"
+     $InactiveDays= "-"
+    }
+    else
+    {
+     $InactiveDays= (New-TimeSpan -Start $LastSignInDate).Days
+    }
+    $Print = 0
+    
+    if($LicenseStatus -ne $null)
+    {
+        $LicenseStatus = "Licensed"
+    }
+    else
+    {
+        $LicenseStatus = "Unlicensed"
+    }
+    if($_.AccountEnabled -eq $true)
+    {
+        $AccountStatus = "Enabled"
+    }
+    else
+    {
+        $AccountStatus = "Disabled"
+    }
+    #Finding password validity period for user
+    $UserDomain= $UPN -Split "@" | Select-Object -Last 1 
+    $PwdValidityPeriod=$PwdPolicy[$UserDomain]
+    #Check for Pwd never expires set from pwd policy
+    if([int]$PwdValidityPeriod -eq 2147483647)
+    {
+        $PwdNeverExpire = $true
+        $PwdExpireIn = "Never Expires"
+        $PwdExpiryDate = "-"
+        $PwdExpiresIn = "-"
+    }
+    elseif($PwdValidityPeriod -eq 0) #Users from federated domain
+    {
+        $Federated = $true
+        $PwdExpireIn = "Insufficient data in O365"
+        $PwdExpiryDate = "-"
+        $PwdExpiresIn = "-"
+    }
+    elseif($PwdPolicies -eq "none" -or $PwdPolicies -eq "DisableStrongPassword") #Check for Pwd never expires set from Set-MsolUser
+    {
+        $PwdExpiryDate = $PwdLastChange.AddDays($PwdValidityPeriod)
+        $PwdExpiresIn = (New-TimeSpan -Start (Get-Date) -End $PwdExpiryDate).Days
+        if($PwdExpiresIn -gt 0)
+        {
+            $PwdExpireIn = "Will expire in $PwdExpiresIn days"
+        }
+        elseif($PwdExpiresIn -lt 0)
+        {
+            #Write-host `n $PwdExpiresIn
+            $PwdExpireIn = $PwdExpiresIn * (-1)
+            #Write-Host ************$pwdexpiresin
+            $PwdExpireIn = "Expired $PwdExpireIn days ago"
+        }
+        else
+        {
+            $PwdExpireIn = "Today"
+        }
+    }
+    else
+    {
+        $PwdExpireIn = "Never Expires"
+        $PwdExpiryDate = "-"
+        $PwdExpiresIn = "-"
+    }
+    #Calculating Password since last set
+    $PwdSinceLastSet = (New-TimeSpan -Start $PwdLastChange).Days
+    #Filter for enabled users
+    if(($EnabledUsersOnly.IsPresent) -and ($_.AccountEnabled -eq $false))
+    {
+        return
+    }
+    #Filter for user with Password nerver expires
+    if(($PwdNeverExpires.IsPresent) -and ($PwdExpireIn -ne "Never Expires"))
+    {
+        return
+    }
+ 
+    #Filter for password expired users
+    if(($PwdExpired.IsPresent) -and (($PwdExpiresIn -ge 0) -or ($PwdExpiresIn -eq "-")))
+    { 
+        return
+    }
+
+    #Filter for licensed users
+    if(($LicensedUserOnly.IsPresent) -and ($LicenseStatus -eq "Unlicensed"))
+    {
+        return
+    }
+
+    #Filter for soon to expire pwd users
+    if(($SoonToExpire -ne "") -and (($PwdExpiryDate -eq "-") -or ($SoonToExpire -lt $PwdExpiresIn) -or ($PwdExpiresIn -lt 0)))
+    { 
+        return
+    }
+
+    #Filter for recently password changed users
+    if(($RecentPwdChanges -ne "") -and ($PwdSinceLastSet -gt $RecentPwdChanges))
+    {
+        return
+    }
+    if($Federated -eq $true)
+    {
+        $PwdExpiryDate = "Insufficient data in O365"
+        $PwdExpiresIn = "Insufficient data in O365"
+    }
+    $PrintedUser++ 
+    #Export result to csv
+    $Result = [PSCustomObject]@{'Display Name'=$_.DisplayName;'User Principal Name'=$UPN;'Pwd Last Change Date'=$PwdLastChange;'Days since Pwd Last Set'=$PwdSinceLastSet;'Pwd Expiry Date'=$PwdExpiryDate;'Friendly Expiry Time'=$PwdExpireIn ;'Days since Expiry(-) / Days to Expiry(+)'=$PwdExpiresIn;'License Status'=$LicenseStatus;'Account Status'=$AccountStatus;'Last Sign-in Date'=$LastSignInDate;'Inactive Days'=$InactiveDays}
+    $Result | Export-Csv -Path $ExportCSV -Notype -Append
+    $htmlRows += $Result
+}
+if($UserCount -eq 0)
+{
+    Write-Log -Message "No records found" -Level 'WARNING'
+}
+else
+{
+    Write-Log -Message "The output file contains $PrintedUser users." -Level 'SUCCESS'
+
+    # Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
+    $htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
+    $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
+        $expBadge = if ("$($rowRef.'Pwd Expiry Date')" -eq '-') { 'medium' } else { 'low' }
+        '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'User Principal Name')") + '</code></td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Display Name')") + '</td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Pwd Last Change Date')") + '</td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Pwd Expiry Date')") + '</td>' +
+        '<td><span class="badge ' + $expBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Days since Expiry(-) / Days to Expiry(+)')") + '</span></td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'License Status')") + '</td></tr>'
+    }
+    $tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
+    $tableHtml = '<div class="section-title">Password Expiry Detail</div>' +
+        '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
+        '<table><thead><tr><th>User</th><th>Display Name</th><th>Last Change</th><th>Expiry Date</th><th>Days -/+</th><th>License</th></tr></thead><tbody>' +
+        ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
+
+    $neverCount = @($htmlRows | Where-Object { $_."Pwd Expiry Date" -eq '-' }).Count
+    $kpis = @(
+        @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
+        @{ value = "$neverCount"; label = 'Never expires'; color = '#f1c21b' }
+    )
+    Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Password Expiry Report' -Subtitle ("Users: $($htmlRows.Count) | Never expires: $neverCount") `
+        -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'Password Expiry Report'
+    Write-Log -Message "CSV:  $ExportCSV ($PrintedUser users)" -Level 'SUCCESS'
+    Write-Log -Message "HTML: $htmlPath" -Level 'SUCCESS'
+
+    if((Test-Path -Path $ExportCSV) -eq "True") 
+    {
+        Write-Log -Message "The output file available in: $ExportCSV" -Level 'INFO'
+   
+        $Prompt = New-Object -ComObject wscript.shell   
+        $UserInput = $Prompt.popup("Do you want to open output file?",` 0,"Open Output File",4)   
+        if ($UserInput -eq 6)   
+        {   
+            Invoke-Item "$ExportCSV"   
+        } 
     }
 }
 
-Connect_MgGraph
-Write-Log -Message "📝 If you encounter module-related conflicts, run the script in a fresh PowerShell window." -Level 'WARNING'
-
-# Define the CSV export path in the script's directory
-$ExportCSV = Join-Path -Path $PSScriptRoot -ChildPath "InactiveM365UserReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd hh-mm-ss tt')).csv"
-$ExportResults = @()  
-
-# Retrieve inactive users
-Write-Log -Message "🔄 Retrieving inactive users from Microsoft 365..." -Level 'INFO'
-$RequiredProperties = @('UserPrincipalName', 'EmployeeId', 'DisplayName', 'CreatedDateTime', 'AccountEnabled', 'Department', 'JobTitle', 'RefreshTokensValidFromDateTime', 'SigninActivity')
-$Count = 0
-$PrintedUser = 0
-
-Get-MgBetaUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object {
-    $Count++
-    $UPN = $_.UserPrincipalName
-    Write-Progress -Activity "🔎 Processing user: $Count - $UPN"
-
-    # Extract user details
-    $LastInteractiveSignIn = $_.SignInActivity.LastSignInDateTime
-    $LastNon_InteractiveSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    
-    # Handle inactive days calculation
-    if ($LastInteractiveSignIn -eq $null) { $LastInteractiveSignIn = "Never Logged In"; $InactiveDays_InteractiveSignIn = "-" }
-    else { $InactiveDays_InteractiveSignIn = (New-TimeSpan -Start $LastInteractiveSignIn).Days }
-    
-    if ($LastNon_InteractiveSignIn -eq $null) { $LastNon_InteractiveSignIn = "Never Logged In"; $InactiveDays_NonInteractiveSignIn = "-" }
-    else { $InactiveDays_NonInteractiveSignIn = (New-TimeSpan -Start $LastNon_InteractiveSignIn).Days }
-    
-    $AccountStatus = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-
-    # Export to CSV and collect the same row for the HTML dashboard.
-    [PSCustomObject]@{
-        
-        'UPN' = $UPN; 'Creation Date' = $_.CreatedDateTime; 'Last Interactive SignIn Date' = $LastInteractiveSignIn;
-        'Last Non Interactive SignIn Date' = $LastNon_InteractiveSignIn; 'Inactive Days(Interactive SignIn)' = $InactiveDays_InteractiveSignIn;
-        'Inactive Days(Non-Interactive Signin)' = $InactiveDays_NonInteractiveSignIn; 'Account Status' = $AccountStatus;
-        'Department' = $_.Department; 'Employee ID' = $_.EmployeeId; 'Employee Name' = $_.DisplayName; 'Job Title' = $_.JobTitle
-    } | ForEach-Object { $ExportResults += $_; $_ } | Export-Csv -Path $ExportCSV -NoTypeInformation -Encoding UTF8 -Append
-}
-
-# Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
-$htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
-$htmlRows = @($ExportResults)
-$tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    $statusBadge = if ("$($rowRef.'Account Status')" -eq 'Disabled') { 'medium' } else { 'low' }
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UPN)") + '</code></td>' +
-    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Account Status')") + '</span></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Last Interactive SignIn Date')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Inactive Days(Interactive SignIn)')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Department)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Job Title')") + '</td></tr>'
-}
-$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Inactive User Detail</div>' +
-    '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>UPN</th><th>Status</th><th>Last Interactive Sign-In</th><th>Inactive Days</th><th>Department</th><th>Job Title</th></tr></thead><tbody>' +
-    ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
-
-$disabledCount = @($htmlRows | Where-Object { $_."Account Status" -eq 'Disabled' }).Count
-$neverCount = @($htmlRows | Where-Object { $_."Last Interactive SignIn Date" -eq 'Never Logged In' }).Count
-$kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
-    @{ value = "$disabledCount"; label = 'Disabled users'; color = '#f1c21b' },
-    @{ value = "$neverCount"; label = 'Never logged in'; color = '#da1e28' }
-)
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 Inactive User Report' -Subtitle ("Users: $($htmlRows.Count) | Disabled: $disabledCount | Never logged in: $neverCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 Inactive User Report'
-
-# Final message
-Write-Log -Message "✅ Script executed successfully. Exported report has $($htmlRows.Count) user(s)." -Level 'SUCCESS'
-Write-Log -Message "📄 CSV:  $ExportCSV" -Level 'WARNING'
-Write-Log -Message "📄 HTML: $htmlPath" -Level 'WARNING'
-Invoke-Item "$ExportCSV"
+Disconnect-MgGraph | Out-Null
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).

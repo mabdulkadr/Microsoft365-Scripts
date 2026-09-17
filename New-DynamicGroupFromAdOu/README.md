@@ -1,10 +1,10 @@
 <div align="center">
 
-# 💻 Add-DevicesToAzureADGroup
+# 💻 New-DynamicGroupFromAdOu
 
-**Bulk-add devices to an Entra ID group by device name.**
+**Mirror on-prem AD OUs as dynamic Entra ID device groups.**
 
-Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
+Creates one `Devices-<OU>` dynamic group per on-premises OU, targeting devices by `onPremisesDistinguishedName`.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,26 +20,25 @@ Resolves names to Device Object IDs first — the step Azure AD's bulk import ca
 
 # 📖 Overview
 
-**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
+**New-DynamicGroupFromAdOu** is a PowerShell script for hybrid environments. It reads OU names from on-premises Active Directory and creates matching dynamic Entra ID groups (prefix `Devices-`), each with a membership rule on `onPremisesDistinguishedName`. Existing group names are checked first so reruns create no duplicates.
 
 ---
 
 # ✨ Features
 
-* Bulk add from a CSV of device names
-* Automatic Device ID lookup per name
-* Handles duplicate device names (adds all matches)
-* Skips not-found / already-member devices with per-device output
+* Discovers all OU names from on-prem AD automatically
+* Creates one dynamic group per OU with a `Devices-` prefix
+* Pre-creation duplicate check — safe to rerun
+* Auto-installs required PowerShell modules; secure app-based Graph auth
 
 ---
 
 # 📂 Project Structure
 
 ```text
-Add-DevicesToAzureADGroup
+New-DynamicGroupFromAdOu
 │
-├── Add-DevicesToAzureADGroup.ps1
-├── SampleDevicesFile.csv
+├── New-DynamicGroupFromAdOu.ps1
 └── README.md
 ```
 
@@ -49,27 +48,24 @@ Add-DevicesToAzureADGroup
 
 ### Basic Usage
 ```powershell
-.\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
+.\New-DynamicGroupFromAdOu.ps1
 ```
 
-### CSV Format
-```csv
-DeviceName
-Device-01
-Device-02
-Device-03
-```
-
-Device names must match Entra ID exactly.
+### How It Works
+1. Edit the configuration block (`$tenantID`, `$appID`, `$appSecret`, `$groupPrefix`).
+2. Run from a machine joined to (or able to reach) the on-prem AD; the script pulls OU names and mirrors them to Entra ID.
 
 ---
 
 # ⚙️ Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `GroupName` | String | Yes | — | Target Entra ID group name. |
-| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
+This script takes no command-line parameters. All settings live in the configuration block at the top of the script:
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `$groupPrefix` | String | `Devices - ` | Prefix for created group names. |
+| `$tenantID` / `$appID` / `$appSecret` | String | `""` | App-based auth credentials. |
+| `$logFilePath` | String | `C:\CreateDynamicGroups.log` | Local log file path. |
 
 ### Exit Codes
 | Code | Status |
@@ -82,22 +78,23 @@ Device names must match Entra ID exactly.
 # ⚙️ Requirements
 
 ### Operating System
-* Windows 10 / Windows 11
+* Windows 10 / Windows 11 / Windows Server 2019+ with line-of-sight to on-prem AD
 
 ### PowerShell
 * PowerShell **5.1 or later**
-* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
 
 ### Permissions
-* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
+* On-prem AD read (OU enumeration); Graph `Group.ReadWrite.All`, `Directory.Read.All`.
+
+### Logging
+* Local log file (see `$logFilePath` above).
 
 ---
 
 # 🛡 Operational Notes
-* Connects to Azure AD automatically before operating.
-* Members already in the group are skipped, not errored.
-* Sample input: `SampleDevicesFile.csv` in this folder.
-* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
+* Requires connectivity to **both** on-prem AD and Microsoft Graph — it is a hybrid-only tool.
+* Never commit real tenant IDs or secrets; replace the checked-in placeholders per environment.
+* CSV-driven variant: [`New-DynamicGroupFromCsv`](../New-DynamicGroupFromCsv/README.md). Single-keyword variant: [`New-DynamicGroupByKeyword`](../New-DynamicGroupByKeyword/README.md).
 
 ---
 

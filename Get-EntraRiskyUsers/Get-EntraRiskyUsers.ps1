@@ -1,67 +1,67 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Get-EntraRiskyUsers - Risky Users and Detections Report
 
 .SYNOPSIS
-    This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
+    Reports risky users and risk detections from Entra ID Protection.
 
 .DESCRIPTION
-    - Retrieves user sign-in data from Microsoft Graph API.
-    - Identifies inactive users based on interactive and non-interactive sign-ins.
-    - Filters users based on multiple criteria (enabled users, disabled users, external users, etc.).
-    - Exports results into a properly formatted CSV file with UTF-8 encoding.
-    - Automatically installs the required Microsoft Graph PowerShell module if missing.
-    - Scheduler-friendly for automated execution.
+    Pulls risky users and risk detection events showing risk level, risk state, risk detail, last detection time, and remediation status. Requires Entra ID P2 for full data.
+
+        Scope & safety:
+        - Read-only Graph queries; never modifies risk state.
+        Degradation behavior:
+        - Missing P2 data renders as empty sections without error.
+        Output contract:
+        - Console summary plus CSV beside the script; exit 0 = success, 1 = failure.
 
 .TAGS
-    Identity,M365,Reporting
+    Reporting,EntraID,RiskyUsers,Graph
 
 .PLATFORM
-    Windows 10/11/Server 2019+
+    Windows
+
+.MINROLE
+    Intune Service Administrator
 
 .PERMISSIONS
-    User.Read.All, AuditLog.Read.All
+    IdentityRiskyUser.Read.All, IdentityRiskEvent.Read.All
 
 .AUTHOR
     AI Generated
 
 .VERSION
-    1.0.0
+    1.0.1
 
 .CHANGELOG
-    1.0.0 (2026-09-16) - Compliance hardening: canonical rich header, ErrorActionPreference Stop, alias and catch hygiene.
+    1.0.1 (2026-08-26)
+    - Migrated to Enterprise Admin standards (canonical header order, structured logging, PS 5.1 contract)
+    1.0.0
+    - Initial release
 
 .LASTUPDATE
-    2026-09-16
+    2026-08-26
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
-    Runs an inactivity report for users inactive more than 90 days.
+    .\Get-EntraRiskyUsers.ps1
+    Reports active risky users and detections.
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
-    Lists enabled users who never logged in (provisioning cleanup).
+    .\Get-EntraRiskyUsers.ps1 -IncludeDismissed
+    Includes dismissed risky users in the report.
 
 .NOTES
-    Part of Microsoft365-Scripts toolkit - Identity,M365,Reporting
-    Exit codes: 0 = success, 1 = failure, 2 = script error
-    Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
+    - Requires Microsoft.Graph.Authentication module and Entra ID P2 license.
+        - Read-only; no risk state changes.
+        - Logs: C:\ProgramData\Get-EntraRiskyUsers\Logs\
 #>
 
 #Requires -Version 5.1
 
-Param
-(
-    [int]$InactiveDays,
-    [int]$InactiveDays_NonInteractive,
-    [switch]$ReturnNeverLoggedInUser,
-    [switch]$EnabledUsersOnly,
-    [switch]$DisabledUsersOnly,
-    [switch]$ExternalUsersOnly,
-    [switch]$CreateSession,
-    [string]$TenantId,
-    [string]$ClientId,
-    [string]$CertificateThumbprint
+[CmdletBinding()]
+param(
+    [Parameter()][switch]$IncludeDismissed,
+    [Parameter()][string]$ExportPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,14 +70,18 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'GetM365InactiveUserReport'
+$SolutionName = 'Get-EntraRiskyUsers'
 $ScriptMode   = 'run'
 
 # ============================================================================
-# LOGGING BLOCK (embedded canonical Write-Log - General CLI, ProgramData only)
+# LOGGING BLOCK (embedded canonical scripts/Write-Log.ps1 - copy VERBATIM)
 # Single source of truth: Initialize-Log / Write-Banner / Write-Log / Finish-Script.
 # ============================================================================
 
+# --- Logging (CLI Configuration) --------------------------------------------
+$script:SystemDrive = if ($env:SystemDrive) { $env:SystemDrive.TrimEnd('\') } else {
+    [System.IO.Path]::GetPathRoot($env:SystemRoot).TrimEnd('\')
+}
 $script:LogRoot  = $null
 $script:LogFile  = $null
 $script:LogReady = $false
@@ -188,127 +192,124 @@ function Finish-Script {
     }
 }
 
+# ============================================================================
+# REPORT OUTPUT ANCHORING (Law 12)
+# Anchors relative output paths beside the script using fallback chain.
+# ============================================================================
+
+$scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot }
+elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+else { (Get-Location).Path }
+
+# Resolve relative ExportPath/OutputPath beside the script (Law 12).
+if ($PSBoundParameters.ContainsKey('ExportPath') -and $ExportPath -and -not [System.IO.Path]::IsPathRooted($ExportPath)) {
+    $ExportPath = Join-Path $scriptDirectory $ExportPath
+}
+if ($PSBoundParameters.ContainsKey('OutputPath') -and $OutputPath -and -not [System.IO.Path]::IsPathRooted($OutputPath)) {
+    $OutputPath = Join-Path $scriptDirectory $OutputPath
+}
+
+
+# ============================================================================
+# MAIN ENTRY LOGGING INITIALIZATION
+# ============================================================================
+
 $null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type 'General'
 Write-Banner
+if ($script:LogReady) {
+    Write-Log -Message "Log file ready: $($script:LogFile)" -Level 'DEBUG'
+}
+Write-Log -Message "Script started: Get-EntraRiskyUsers" -Level 'INFO'
 
-# ============================================================================
-# GRAPH CONNECTION - installs the Beta module on confirmation, then signs in.
-# ============================================================================
 
-# Ensures the Graph Beta module exists (prompted install) and connects; honors -CreateSession.
-Function Connect_MgGraph
-{
-    # Check if the Microsoft Graph Beta module is installed
-    $MsGraphBetaModule = Get-Module Microsoft.Graph.Beta -ListAvailable
-    if ($MsGraphBetaModule -eq $null)
-    { 
-        Write-Log -Message "⚠️ Microsoft Graph Beta module is missing. It must be installed to run the script successfully." -Level 'WARNING'
-        $confirm = Read-Host "Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No"  
-        if ($confirm -match "[yY]") 
-        { 
-            Write-Log -Message "📦 Installing Microsoft Graph Beta module..." -Level 'INFO'
-            Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
-            Write-Log -Message "✅ Microsoft Graph Beta module installed successfully." -Level 'SUCCESS'
-        } 
-        else
-        { 
-            Write-Log -Message "❌ Exiting. Microsoft Graph Beta module is required for this script." -Level 'ERROR'
-            Exit 
-        } 
+
+
+
+# Risk detections (last 14 days)
+Write-Log -Message "=== RISK DETECTIONS (last 14 days) ===" -Level 'INFO'
+$startDate = (Get-Date).AddDays(-14).ToString('yyyy-MM-ddTHH:mm:ssZ')
+$riskDetections = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/identityProtection/riskDetections?`$filter=detectedDateTime ge $startDate&`$top=200&`$orderby=detectedDateTime desc"
+Write-Log -Message "$($riskDetections.Count) risk detection(s)" -Level 'INFO'
+
+if ($riskDetections.Count -gt 0) {
+    # Detection type breakdown
+    $typeGroups = $riskDetections | Group-Object riskEventType | Sort-Object Count -Descending
+    Write-Log -Message "--- Detection Types ---" -Level 'WARNING'
+    foreach ($tg in $typeGroups) {
+        Write-Log -Message "$($tg.Name) : $($tg.Count)" -Level 'INFO'
     }
-    
-    # Disconnect any existing Microsoft Graph sessions if requested
-    if ($CreateSession.IsPresent)
-    {
-        Disconnect-MgGraph
+
+    # Risk level breakdown
+    $levelGroups = $riskDetections | Group-Object riskLevel | Sort-Object { switch($_.Name){'high'{0}'medium'{1}'low'{2}default{3}} }
+    Write-Log -Message "--- By Risk Level ---" -Level 'WARNING'
+    foreach ($lg in $levelGroups) {
+        $c = switch ($lg.Name) { 'high'{'Red'} 'medium'{'Yellow'} 'low'{'DarkYellow'} default{'DarkGray'} }
+        Write-Log -Message "$($lg.Name) : $($lg.Count)" -Level 'INFO'
     }
-    
-    # Connecting to Microsoft Graph
-    Write-Log -Message "🔗 Connecting to Microsoft Graph..." -Level 'INFO'
-    if (($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint 
+
+    # Recent high-risk detections
+    $highDetections = $riskDetections | Where-Object { $_.riskLevel -eq 'high' } | Select-Object -First 10
+    if ($highDetections.Count -gt 0) {
+        Write-Log -Message "--- Recent High-Risk Detections ---" -Level 'ERROR'
+        foreach ($hd in $highDetections) {
+            $loc = if ($hd.location) { "$($hd.location.city), $($hd.location.countryOrRegion)" } else { '-' }
+            Write-Log -Message "$($hd.userDisplayName) | $($hd.riskEventType) | IP: $($hd.ipAddress) | $loc" -Level 'INFO'
+        }
     }
-    else
-    {
-        Connect-MgGraph -Scopes "User.Read.All", "AuditLog.read.All"  
+
+    foreach ($rd in $riskDetections) {
+        $loc = if ($rd.location) { "$($rd.location.city), $($rd.location.countryOrRegion)" } else { '-' }
+        $userReport.Add([PSCustomObject]@{
+            Type='RiskDetection'; UserPrincipalName=$rd.userPrincipalName; DisplayName=$rd.userDisplayName
+            RiskLevel=$rd.riskLevel; RiskState=$rd.riskState; RiskDetail=$rd.riskDetail
+            RiskLastUpdated=$rd.detectedDateTime; IsDeleted='-'
+            DetectionType=$rd.riskEventType; IPAddress=$rd.ipAddress; Location=$loc; Activity=$rd.activity
+        })
     }
 }
 
-Connect_MgGraph
-Write-Log -Message "📝 If you encounter module-related conflicts, run the script in a fresh PowerShell window." -Level 'WARNING'
+Write-Log -Message "=== SUMMARY ===" -Level 'INFO'
+Write-Log -Message "Risky users       : $($riskyUsers.Count)" -Level 'INFO'
+Write-Log -Message "Risk detections   : $($riskDetections.Count) (14 days)" -Level 'INFO'
 
-# Define the CSV export path in the script's directory
-$ExportCSV = Join-Path -Path $PSScriptRoot -ChildPath "InactiveM365UserReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd hh-mm-ss tt')).csv"
-$ExportResults = @()  
+$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$csvPath = if ($ExportPath) { $ExportPath } else { Join-Path $scriptDirectory "RiskyUsers_$stamp.csv" }
+$htmlPath = [System.IO.Path]::ChangeExtension($csvPath, '.html')
+$userReport | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
 
-# Retrieve inactive users
-Write-Log -Message "🔄 Retrieving inactive users from Microsoft 365..." -Level 'INFO'
-$RequiredProperties = @('UserPrincipalName', 'EmployeeId', 'DisplayName', 'CreatedDateTime', 'AccountEnabled', 'Department', 'JobTitle', 'RefreshTokensValidFromDateTime', 'SigninActivity')
-$Count = 0
-$PrintedUser = 0
-
-Get-MgBetaUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object {
-    $Count++
-    $UPN = $_.UserPrincipalName
-    Write-Progress -Activity "🔎 Processing user: $Count - $UPN"
-
-    # Extract user details
-    $LastInteractiveSignIn = $_.SignInActivity.LastSignInDateTime
-    $LastNon_InteractiveSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    
-    # Handle inactive days calculation
-    if ($LastInteractiveSignIn -eq $null) { $LastInteractiveSignIn = "Never Logged In"; $InactiveDays_InteractiveSignIn = "-" }
-    else { $InactiveDays_InteractiveSignIn = (New-TimeSpan -Start $LastInteractiveSignIn).Days }
-    
-    if ($LastNon_InteractiveSignIn -eq $null) { $LastNon_InteractiveSignIn = "Never Logged In"; $InactiveDays_NonInteractiveSignIn = "-" }
-    else { $InactiveDays_NonInteractiveSignIn = (New-TimeSpan -Start $LastNon_InteractiveSignIn).Days }
-    
-    $AccountStatus = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-
-    # Export to CSV and collect the same row for the HTML dashboard.
-    [PSCustomObject]@{
-        
-        'UPN' = $UPN; 'Creation Date' = $_.CreatedDateTime; 'Last Interactive SignIn Date' = $LastInteractiveSignIn;
-        'Last Non Interactive SignIn Date' = $LastNon_InteractiveSignIn; 'Inactive Days(Interactive SignIn)' = $InactiveDays_InteractiveSignIn;
-        'Inactive Days(Non-Interactive Signin)' = $InactiveDays_NonInteractiveSignIn; 'Account Status' = $AccountStatus;
-        'Department' = $_.Department; 'Employee ID' = $_.EmployeeId; 'Employee Name' = $_.DisplayName; 'Job Title' = $_.JobTitle
-    } | ForEach-Object { $ExportResults += $_; $_ } | Export-Csv -Path $ExportCSV -NoTypeInformation -Encoding UTF8 -Append
-}
-
-# Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
-$htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
-$htmlRows = @($ExportResults)
+# Defensive re-collection: $userReport must survive for the HTML table (Rule 26).
+$htmlRows = @($userReport)
+if (-not $htmlRows) { $htmlRows = @() }
 $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    $statusBadge = if ("$($rowRef.'Account Status')" -eq 'Disabled') { 'medium' } else { 'low' }
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UPN)") + '</code></td>' +
-    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Account Status')") + '</span></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Last Interactive SignIn Date')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Inactive Days(Interactive SignIn)')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Department)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Job Title')") + '</td></tr>'
+    $riskBadge = switch ("$($rowRef.RiskLevel)") { 'high' { 'critical' } 'medium' { 'high' } 'low' { 'medium' } default { 'low' } }
+    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UserPrincipalName)") + '</code></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.DisplayName)") + '</td>' +
+    '<td><span class="badge ' + $riskBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.RiskLevel)") + '</span></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.RiskState)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.DetectionType)") + '</td>' +
+    '<td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.IPAddress)") + '</code></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Location)") + '</td></tr>'
 }
-$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Inactive User Detail</div>' +
-    '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>UPN</th><th>Status</th><th>Last Interactive Sign-In</th><th>Inactive Days</th><th>Department</th><th>Job Title</th></tr></thead><tbody>' +
+$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) rows; full data is in the CSV.</p>" } else { '' }
+$tableHtml = '<div class="section-title">Risk Detail</div>' +
+    '<div class="card"><h2>Risky Users &amp; Detections (' + $htmlRows.Count + ')</h2>' +
+    '<table><thead><tr><th>User</th><th>Display Name</th><th>Risk Level</th><th>Risk State</th><th>Detection Type</th><th>IP</th><th>Location</th></tr></thead><tbody>' +
     ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
 
-$disabledCount = @($htmlRows | Where-Object { $_."Account Status" -eq 'Disabled' }).Count
-$neverCount = @($htmlRows | Where-Object { $_."Last Interactive SignIn Date" -eq 'Never Logged In' }).Count
+$highCount = @($riskDetections | Where-Object { $_.riskLevel -eq 'high' }).Count
 $kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
-    @{ value = "$disabledCount"; label = 'Disabled users'; color = '#f1c21b' },
-    @{ value = "$neverCount"; label = 'Never logged in'; color = '#da1e28' }
+    @{ value = "$($riskyUsers.Count)"; label = 'Risky users'; color = '#da1e28' },
+    @{ value = "$($riskDetections.Count)"; label = 'Detections (14 days)'; color = '#f1c21b' },
+    @{ value = "$highCount"; label = 'High-risk detections'; color = '#da1e28' },
+    @{ value = "$($userReport.Count)"; label = 'Report rows'; color = '' }
 )
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 Inactive User Report' -Subtitle ("Users: $($htmlRows.Count) | Disabled: $disabledCount | Never logged in: $neverCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 Inactive User Report'
-
-# Final message
-Write-Log -Message "✅ Script executed successfully. Exported report has $($htmlRows.Count) user(s)." -Level 'SUCCESS'
-Write-Log -Message "📄 CSV:  $ExportCSV" -Level 'WARNING'
-Write-Log -Message "📄 HTML: $htmlPath" -Level 'WARNING'
-Invoke-Item "$ExportCSV"
+$mgContext = try { Get-MgContext } catch [System.Exception] { $null }
+$tenantId = if ($mgContext) { $mgContext.TenantId } else { '' }
+Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Entra Risky Users' -Subtitle ("Risky users: $($riskyUsers.Count) | Detections (14d): $($riskDetections.Count)") `
+    -Tenant $tenantId -Body $tableHtml -Kpis $kpis -Version '1.0.1' -ReportName 'Entra Risky Users'
+Write-Log -Message "CSV:  $csvPath ($($userReport.Count) rows)" -Level 'INFO'
+Write-Log -Message "HTML: $htmlPath" -Level 'INFO'
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).

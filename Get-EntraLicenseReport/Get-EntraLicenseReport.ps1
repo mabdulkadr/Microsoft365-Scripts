@@ -1,68 +1,65 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Get-EntraLicenseReport - Entra ID License Utilization Report
 
 .SYNOPSIS
-    This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
+    Reports Entra ID license utilization and identifies waste.
 
 .DESCRIPTION
-    - Retrieves user sign-in data from Microsoft Graph API.
-    - Identifies inactive users based on interactive and non-interactive sign-ins.
-    - Filters users based on multiple criteria (enabled users, disabled users, external users, etc.).
-    - Exports results into a properly formatted CSV file with UTF-8 encoding.
-    - Automatically installs the required Microsoft Graph PowerShell module if missing.
-    - Scheduler-friendly for automated execution.
+    Lists all license SKUs with assigned versus available counts, identifies users with no licenses and disabled accounts still consuming licenses, and calculates utilization rates for optimization.
+
+        Scope & safety:
+        - Read-only Graph queries; never modifies licenses or users.
+        Degradation behavior:
+        - Missing license data renders as zero counts without failing the export.
+        Output contract:
+        - Console summary plus CSV beside the script; exit 0 = success, 1 = failure.
 
 .TAGS
-    Identity,M365,Reporting
+    Reporting,EntraID,Licenses,Graph
 
 .PLATFORM
-    Windows 10/11/Server 2019+
+    Windows
+
+.MINROLE
+    Intune Service Administrator
 
 .PERMISSIONS
-    User.Read.All, AuditLog.Read.All
+    Organization.Read.All, User.Read.All, Directory.Read.All
 
 .AUTHOR
     AI Generated
 
 .VERSION
-    1.0.0
+    1.0.1
 
 .CHANGELOG
-    1.0.0 (2026-09-16) - Compliance hardening: canonical rich header, ErrorActionPreference Stop, alias and catch hygiene.
+    1.0.1 (2026-08-26)
+    - Migrated to Enterprise Admin standards (canonical header order, structured logging, PS 5.1 contract)
+    1.0.0
+    - Initial release
 
 .LASTUPDATE
-    2026-09-16
+    2026-08-26
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
-    Runs an inactivity report for users inactive more than 90 days.
+    .\Get-EntraLicenseReport.ps1
+    Generates the license utilization report for the tenant.
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
-    Lists enabled users who never logged in (provisioning cleanup).
+    .\\Get-EntraLicenseReport.ps1 -ExportPath "C:\\Reports\\Licenses.csv"
+    Exports user license data to a specific CSV.
 
 .NOTES
-    Part of Microsoft365-Scripts toolkit - Identity,M365,Reporting
-    Exit codes: 0 = success, 1 = failure, 2 = script error
-    Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
+    - Requires Microsoft.Graph.Authentication module.
+        - Read-only; no license changes.
+        - Logs: C:\ProgramData\Get-EntraLicenseReport\Logs\
 #>
 
 #Requires -Version 5.1
 
-Param
-(
-    [int]$InactiveDays,
-    [int]$InactiveDays_NonInteractive,
-    [switch]$ReturnNeverLoggedInUser,
-    [switch]$EnabledUsersOnly,
-    [switch]$DisabledUsersOnly,
-    [switch]$ExternalUsersOnly,
-    [switch]$CreateSession,
-    [string]$TenantId,
-    [string]$ClientId,
-    [string]$CertificateThumbprint
-)
+[CmdletBinding()]
+param([Parameter()][string]$ExportPath)
 
 $ErrorActionPreference = 'Stop'
 
@@ -70,14 +67,18 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'GetM365InactiveUserReport'
+$SolutionName = 'Get-EntraLicenseReport'
 $ScriptMode   = 'run'
 
 # ============================================================================
-# LOGGING BLOCK (embedded canonical Write-Log - General CLI, ProgramData only)
+# LOGGING BLOCK (embedded canonical scripts/Write-Log.ps1 - copy VERBATIM)
 # Single source of truth: Initialize-Log / Write-Banner / Write-Log / Finish-Script.
 # ============================================================================
 
+# --- Logging (CLI Configuration) --------------------------------------------
+$script:SystemDrive = if ($env:SystemDrive) { $env:SystemDrive.TrimEnd('') } else {
+    [System.IO.Path]::GetPathRoot($env:SystemRoot).TrimEnd('')
+}
 $script:LogRoot  = $null
 $script:LogFile  = $null
 $script:LogReady = $false
@@ -108,7 +109,7 @@ function Initialize-Log {
         return $true
     }
     catch {
-        Write-Host "Log initialization failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Log -Message "Log initialization failed: $($_.Exception.Message)" -Level 'ERROR'
         $script:LogReady = $false
         return $false
     }
@@ -188,127 +189,134 @@ function Finish-Script {
     }
 }
 
+# ============================================================================
+# REPORT OUTPUT ANCHORING (Law 12)
+# Anchors relative output paths beside the script using fallback chain.
+# ============================================================================
+
+$scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot }
+elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+else { (Get-Location).Path }
+
+# Resolve relative ExportPath/OutputPath beside the script (Law 12).
+if ($PSBoundParameters.ContainsKey('ExportPath') -and $ExportPath -and -not [System.IO.Path]::IsPathRooted($ExportPath)) {
+    $ExportPath = Join-Path $scriptDirectory $ExportPath
+}
+if ($PSBoundParameters.ContainsKey('OutputPath') -and $OutputPath -and -not [System.IO.Path]::IsPathRooted($OutputPath)) {
+    $OutputPath = Join-Path $scriptDirectory $OutputPath
+}
+
+
+# ============================================================================
+# MAIN ENTRY LOGGING INITIALIZATION
+# ============================================================================
+
 $null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type 'General'
 Write-Banner
+if ($script:LogReady) {
+    Write-Log -Message "Log file ready: $($script:LogFile)" -Level 'DEBUG'
+}
+Write-Log -Message "Script started: Get-EntraLicenseReport" -Level 'INFO'
 
-# ============================================================================
-# GRAPH CONNECTION - installs the Beta module on confirmation, then signs in.
-# ============================================================================
 
-# Ensures the Graph Beta module exists (prompted install) and connects; honors -CreateSession.
-Function Connect_MgGraph
-{
-    # Check if the Microsoft Graph Beta module is installed
-    $MsGraphBetaModule = Get-Module Microsoft.Graph.Beta -ListAvailable
-    if ($MsGraphBetaModule -eq $null)
-    { 
-        Write-Log -Message "⚠️ Microsoft Graph Beta module is missing. It must be installed to run the script successfully." -Level 'WARNING'
-        $confirm = Read-Host "Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No"  
-        if ($confirm -match "[yY]") 
-        { 
-            Write-Log -Message "📦 Installing Microsoft Graph Beta module..." -Level 'INFO'
-            Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
-            Write-Log -Message "✅ Microsoft Graph Beta module installed successfully." -Level 'SUCCESS'
-        } 
-        else
-        { 
-            Write-Log -Message "❌ Exiting. Microsoft Graph Beta module is required for this script." -Level 'ERROR'
-            Exit 
-        } 
+
+
+
+Write-Log -Message "--- Totals ---" -Level 'WARNING'
+Write-Log -Message "Total purchased : $totalPurchased" -Level 'INFO'
+Write-Log -Message "Total consumed  : $totalConsumed" -Level 'INFO'
+Write-Log -Message "Total available : $totalAvailable" -Level 'INFO'
+
+# Get all users with license info
+Write-Log -Message "=== USER LICENSE ANALYSIS ===" -Level 'INFO'
+Write-Log -Message "Fetching all users with license data..." -Level 'INFO'
+$users = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/users?`$select=id,userPrincipalName,displayName,accountEnabled,assignedLicenses,userType&`$top=999"
+Write-Log -Message "$($users.Count) users retrieved" -Level 'INFO'
+
+$licensedUsers = $users | Where-Object { $_.assignedLicenses -and $_.assignedLicenses.Count -gt 0 }
+$unlicensedUsers = $users | Where-Object { -not $_.assignedLicenses -or $_.assignedLicenses.Count -eq 0 }
+$disabledWithLicense = $licensedUsers | Where-Object { -not $_.accountEnabled }
+$guestsWithLicense = $licensedUsers | Where-Object { $_.userType -eq 'Guest' }
+
+$skuIdMap = @{}
+foreach ($sku in $skus) { $skuIdMap[$sku.skuId] = $sku.skuPartNumber }
+
+Write-Log -Message "Total users             : $($users.Count)" -Level 'INFO'
+Write-Log -Message "Licensed users          : $($licensedUsers.Count)" -Level 'SUCCESS'
+Write-Log -Message "Unlicensed users        : $($unlicensedUsers.Count)" -Level 'DEBUG'
+Write-Log -Message "Disabled with licenses  : $($disabledWithLicense.Count)" -Level 'INFO'
+Write-Log -Message "Guests with licenses    : $($guestsWithLicense.Count)" -Level 'INFO'
+
+if ($disabledWithLicense.Count -gt 0) {
+    $wastedLicenseCount = ($disabledWithLicense | ForEach-Object { $_.assignedLicenses.Count } | Measure-Object -Sum).Sum
+    Write-Log -Message "--- Disabled Accounts with Licenses ($($disabledWithLicense.Count)) = $wastedLicenseCount wasted ---" -Level 'ERROR'
+    foreach ($du in ($disabledWithLicense | Select-Object -First 15)) {
+        $licNames = ($du.assignedLicenses | ForEach-Object { if ($skuIdMap.ContainsKey($_.skuId)) { $skuIdMap[$_.skuId] } else { $_.skuId.Substring(0,8) } }) -join ', '
+        Write-Log -Message "$($du.userPrincipalName) | $licNames" -Level 'INFO'
     }
-    
-    # Disconnect any existing Microsoft Graph sessions if requested
-    if ($CreateSession.IsPresent)
-    {
-        Disconnect-MgGraph
-    }
-    
-    # Connecting to Microsoft Graph
-    Write-Log -Message "🔗 Connecting to Microsoft Graph..." -Level 'INFO'
-    if (($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint 
-    }
-    else
-    {
-        Connect-MgGraph -Scopes "User.Read.All", "AuditLog.read.All"  
-    }
+    if ($disabledWithLicense.Count -gt 15) { Write-Log -Message "... and $($disabledWithLicense.Count - 15) more" -Level 'DEBUG' }
 }
 
-Connect_MgGraph
-Write-Log -Message "📝 If you encounter module-related conflicts, run the script in a fresh PowerShell window." -Level 'WARNING'
+# License distribution
+Write-Log -Message "--- License Assignment Distribution ---" -Level 'WARNING'
+$licCounts = $licensedUsers | ForEach-Object { $_.assignedLicenses.Count } | Group-Object | Sort-Object Name
+foreach ($lc in $licCounts) {
+    Write-Log -Message "$($lc.Name) license(s) : $($lc.Count) user(s)" -Level 'INFO'
+}
 
-# Define the CSV export path in the script's directory
-$ExportCSV = Join-Path -Path $PSScriptRoot -ChildPath "InactiveM365UserReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd hh-mm-ss tt')).csv"
-$ExportResults = @()  
+# Export
+$userReport = foreach ($u in $users) {
+    $licNames = if ($u.assignedLicenses) {
+        ($u.assignedLicenses | ForEach-Object { if ($skuIdMap.ContainsKey($_.skuId)) { $skuIdMap[$_.skuId] } else { $_.skuId } }) -join '; '
+    } else { '(none)' }
 
-# Retrieve inactive users
-Write-Log -Message "🔄 Retrieving inactive users from Microsoft 365..." -Level 'INFO'
-$RequiredProperties = @('UserPrincipalName', 'EmployeeId', 'DisplayName', 'CreatedDateTime', 'AccountEnabled', 'Department', 'JobTitle', 'RefreshTokensValidFromDateTime', 'SigninActivity')
-$Count = 0
-$PrintedUser = 0
-
-Get-MgBetaUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object {
-    $Count++
-    $UPN = $_.UserPrincipalName
-    Write-Progress -Activity "🔎 Processing user: $Count - $UPN"
-
-    # Extract user details
-    $LastInteractiveSignIn = $_.SignInActivity.LastSignInDateTime
-    $LastNon_InteractiveSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    
-    # Handle inactive days calculation
-    if ($LastInteractiveSignIn -eq $null) { $LastInteractiveSignIn = "Never Logged In"; $InactiveDays_InteractiveSignIn = "-" }
-    else { $InactiveDays_InteractiveSignIn = (New-TimeSpan -Start $LastInteractiveSignIn).Days }
-    
-    if ($LastNon_InteractiveSignIn -eq $null) { $LastNon_InteractiveSignIn = "Never Logged In"; $InactiveDays_NonInteractiveSignIn = "-" }
-    else { $InactiveDays_NonInteractiveSignIn = (New-TimeSpan -Start $LastNon_InteractiveSignIn).Days }
-    
-    $AccountStatus = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-
-    # Export to CSV and collect the same row for the HTML dashboard.
     [PSCustomObject]@{
-        
-        'UPN' = $UPN; 'Creation Date' = $_.CreatedDateTime; 'Last Interactive SignIn Date' = $LastInteractiveSignIn;
-        'Last Non Interactive SignIn Date' = $LastNon_InteractiveSignIn; 'Inactive Days(Interactive SignIn)' = $InactiveDays_InteractiveSignIn;
-        'Inactive Days(Non-Interactive Signin)' = $InactiveDays_NonInteractiveSignIn; 'Account Status' = $AccountStatus;
-        'Department' = $_.Department; 'Employee ID' = $_.EmployeeId; 'Employee Name' = $_.DisplayName; 'Job Title' = $_.JobTitle
-    } | ForEach-Object { $ExportResults += $_; $_ } | Export-Csv -Path $ExportCSV -NoTypeInformation -Encoding UTF8 -Append
+        UserPrincipalName = $u.userPrincipalName
+        DisplayName       = $u.displayName
+        AccountEnabled    = $u.accountEnabled
+        UserType          = $u.userType
+        LicenseCount      = if ($u.assignedLicenses) { $u.assignedLicenses.Count } else { 0 }
+        Licenses          = $licNames
+        IsWaste           = (-not $u.accountEnabled -and $u.assignedLicenses -and $u.assignedLicenses.Count -gt 0)
+    }
 }
 
-# Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
-$htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
-$htmlRows = @($ExportResults)
+$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$csvPath = if ($ExportPath) { $ExportPath } else { Join-Path $scriptDirectory "LicenseReport_$stamp.csv" }
+$htmlPath = [System.IO.Path]::ChangeExtension($csvPath, '.html')
+$userReport | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+
+# Defensive re-collection: $userReport must survive for the HTML table (Rule 26).
+$htmlRows = @($userReport)
+if (-not $htmlRows) { $htmlRows = @() }
 $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    $statusBadge = if ("$($rowRef.'Account Status')" -eq 'Disabled') { 'medium' } else { 'low' }
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UPN)") + '</code></td>' +
-    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Account Status')") + '</span></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Last Interactive SignIn Date')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Inactive Days(Interactive SignIn)')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Department)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Job Title')") + '</td></tr>'
+    $wasteBadge = if ($rowRef.IsWaste) { 'critical' } else { 'low' }
+    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UserPrincipalName)") + '</code></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.DisplayName)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.LicenseCount)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Licenses)") + '</td>' +
+    '<td><span class="badge ' + $wasteBadge + '">' + $(if ($rowRef.IsWaste) { 'waste' } else { 'ok' }) + '</span></td></tr>'
 }
 $tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Inactive User Detail</div>' +
+$tableHtml = '<div class="section-title">License Assignment Detail</div>' +
     '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>UPN</th><th>Status</th><th>Last Interactive Sign-In</th><th>Inactive Days</th><th>Department</th><th>Job Title</th></tr></thead><tbody>' +
+    '<table><thead><tr><th>User</th><th>Display Name</th><th>Licenses</th><th>Plans</th><th>Waste</th></tr></thead><tbody>' +
     ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
 
-$disabledCount = @($htmlRows | Where-Object { $_."Account Status" -eq 'Disabled' }).Count
-$neverCount = @($htmlRows | Where-Object { $_."Last Interactive SignIn Date" -eq 'Never Logged In' }).Count
 $kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
-    @{ value = "$disabledCount"; label = 'Disabled users'; color = '#f1c21b' },
-    @{ value = "$neverCount"; label = 'Never logged in'; color = '#da1e28' }
+    @{ value = "$($users.Count)"; label = 'Total users'; color = '' },
+    @{ value = "$($licensedUsers.Count)"; label = 'Licensed users'; color = '#24a148' },
+    @{ value = "$($unlicensedUsers.Count)"; label = 'Unlicensed users'; color = '' },
+    @{ value = "$($disabledWithLicense.Count)"; label = 'Disabled holding licenses'; color = '#da1e28' },
+    @{ value = "$($guestsWithLicense.Count)"; label = 'Guests with licenses'; color = '#f1c21b' }
 )
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 Inactive User Report' -Subtitle ("Users: $($htmlRows.Count) | Disabled: $disabledCount | Never logged in: $neverCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 Inactive User Report'
-
-# Final message
-Write-Log -Message "✅ Script executed successfully. Exported report has $($htmlRows.Count) user(s)." -Level 'SUCCESS'
-Write-Log -Message "📄 CSV:  $ExportCSV" -Level 'WARNING'
-Write-Log -Message "📄 HTML: $htmlPath" -Level 'WARNING'
-Invoke-Item "$ExportCSV"
+$mgContext = try { Get-MgContext } catch [System.Exception] { $null }
+$tenantId = if ($mgContext) { $mgContext.TenantId } else { '' }
+Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Entra License Report' -Subtitle ("Users: $($users.Count) | Licensed: $($licensedUsers.Count) | Waste: $($disabledWithLicense.Count)") `
+    -Tenant $tenantId -Body $tableHtml -Kpis $kpis -Version '1.0.1' -ReportName 'Entra License Report'
+Write-Log -Message "CSV:  $csvPath ($($userReport.Count) rows)" -Level 'INFO'
+Write-Log -Message "HTML: $htmlPath" -Level 'INFO'
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).

@@ -1,10 +1,10 @@
 <div align="center">
 
-# 💻 Add-DevicesToAzureADGroup
+# 💻 Get-M365UserLastActivityReport
 
-**Bulk-add devices to an Entra ID group by device name.**
+**Real last-logon report for Office 365 users via mailbox statistics.**
 
-Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
+Finds stale mailboxes by `LastLogonTime` with filters for mailbox type, license, and never-logged-in accounts.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,26 +20,25 @@ Resolves names to Device Object IDs first — the step Azure AD's bulk import ca
 
 # 📖 Overview
 
-**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
+**Get-M365UserLastActivityReport** is a PowerShell script that reports each Office 365 user's real last logon time from Exchange Online mailbox statistics and exports it to CSV + Carbon Dark HTML dashboard. It auto-installs the Exchange Online and MSOnline modules if missing and authenticates to Azure AD + Exchange Online.
 
 ---
 
 # ✨ Features
 
-* Bulk add from a CSV of device names
-* Automatic Device ID lookup per name
-* Handles duplicate device names (adds all matches)
-* Skips not-found / already-member devices with per-device output
+* Per-mailbox `LastLogonTime` collection via Exchange Online
+* Inactivity threshold filter (`-InactiveDays`)
+* Never-logged-in-only mode for provisioning cleanup
+* Mailbox-type, license, and single-user targeting switches
 
 ---
 
 # 📂 Project Structure
 
 ```text
-Add-DevicesToAzureADGroup
+Get-M365UserLastActivityReport
 │
-├── Add-DevicesToAzureADGroup.ps1
-├── SampleDevicesFile.csv
+├── Get-M365UserLastActivityReport.ps1
 └── README.md
 ```
 
@@ -49,18 +48,13 @@ Add-DevicesToAzureADGroup
 
 ### Basic Usage
 ```powershell
-.\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
+.\Get-M365UserLastActivityReport.ps1 -InactiveDays 90
 ```
 
-### CSV Format
-```csv
-DeviceName
-Device-01
-Device-02
-Device-03
+### With Parameters
+```powershell
+.\Get-M365UserLastActivityReport.ps1 -InactiveDays 90 -UserMailboxOnly -LicensedUserOnly
 ```
-
-Device names must match Entra ID exactly.
 
 ---
 
@@ -68,14 +62,22 @@ Device names must match Entra ID exactly.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `GroupName` | String | Yes | — | Target Entra ID group name. |
-| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
+| `MBNamesFile` | String | No | (all) | File with mailbox names to scope the report. |
+| `InactiveDays` | Int | No | (off) | Only mailboxes inactive longer than N days. |
+| `UserMailboxOnly` | Switch | No | off | Only user mailboxes (skip shared/resource). |
+| `LicensedUserOnly` | Switch | No | off | Only licensed users. |
+| `ReturnNeverLoggedInMBOnly` | Switch | No | off | Only mailboxes that never logged in. |
+| `UserName` | String | No | (prompt) | Admin account for authentication. |
+| `Password` | String | No | (prompt) | Admin password (prefer interactive/MFA instead). |
+| `FriendlyTime` | Switch | No | off | Human-friendly time formatting. |
+| `NoMFA` | Switch | No | off | Basic-auth path for non-MFA accounts. |
 
 ### Exit Codes
 | Code | Status |
 | ---- | ------ |
 | 0    | Success |
 | 1    | Failure |
+| 2    | Script error |
 
 ---
 
@@ -86,18 +88,17 @@ Device names must match Entra ID exactly.
 
 ### PowerShell
 * PowerShell **5.1 or later**
-* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
+* Exchange Online + MSOnline modules (auto-installed if missing)
 
 ### Permissions
-* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
+* Exchange Online admin (mailbox statistics read).
 
 ---
 
 # 🛡 Operational Notes
-* Connects to Azure AD automatically before operating.
-* Members already in the group are skipped, not errored.
-* Sample input: `SampleDevicesFile.csv` in this folder.
-* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
+* Prefer MFA/interactive sign-in over `-UserName`/`-Password` + `-NoMFA`.
+* `LastLogonTime` semantics vary by mailbox type — shared/resource mailboxes can mislead; combine with `-UserMailboxOnly`.
+* Large tenants take a while; scope with `-MBNamesFile` for targeted runs.
 
 ---
 

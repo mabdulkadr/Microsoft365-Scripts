@@ -1,67 +1,84 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Get-EntraGroupAudit - Entra ID Group Membership and Configuration Audit
 
 .SYNOPSIS
-    This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
+    Audits Entra ID group membership, ownership, nesting, and configuration.
 
 .DESCRIPTION
-    - Retrieves user sign-in data from Microsoft Graph API.
-    - Identifies inactive users based on interactive and non-interactive sign-ins.
-    - Filters users based on multiple criteria (enabled users, disabled users, external users, etc.).
-    - Exports results into a properly formatted CSV file with UTF-8 encoding.
-    - Automatically installs the required Microsoft Graph PowerShell module if missing.
-    - Scheduler-friendly for automated execution.
+    Provides detailed group analysis including members, direct versus transitive membership, owners, dynamic rules, nested hierarchy, license assignments, and group type classification. Supports single-group deep dive or bulk health audit for empty, large, or ownerless groups.
+
+        Scope & safety:
+        - Read-only Graph queries; never modifies groups or memberships.
+        Degradation behavior:
+        - Missing owners or members render as zero counts without failing the report.
+        Output contract:
+        - Console summary plus CSV beside the script; exit 0 = success, 1 = failure.
 
 .TAGS
-    Identity,M365,Reporting
+    Reporting,EntraID,Groups,Graph
 
 .PLATFORM
-    Windows 10/11/Server 2019+
+    Windows
+
+.MINROLE
+    Intune Service Administrator
 
 .PERMISSIONS
-    User.Read.All, AuditLog.Read.All
+    Directory.Read.All, Group.Read.All, GroupMember.Read.All, User.Read.All
 
 .AUTHOR
     AI Generated
 
 .VERSION
-    1.0.0
+    1.0.1
 
 .CHANGELOG
-    1.0.0 (2026-09-16) - Compliance hardening: canonical rich header, ErrorActionPreference Stop, alias and catch hygiene.
+    1.0.1 (2026-08-26)
+    - Migrated to Enterprise Admin standards (canonical header order, structured logging, PS 5.1 contract)
+    1.0.0
+    - Initial release
 
 .LASTUPDATE
-    2026-09-16
+    2026-08-26
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
-    Runs an inactivity report for users inactive more than 90 days.
+    .\\Get-EntraGroupAudit.ps1 -GroupName "SG-Intune-Windows-Devices"
+    Runs a deep dive on a single group.
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
-    Lists enabled users who never logged in (provisioning cleanup).
+    .\\Get-EntraGroupAudit.ps1 -GroupName "SG-Intune-Pilot" -IncludeMembers -ExportPath "C:\\temp\\members.csv"
+    Exports members of a group to CSV.
+
+.EXAMPLE
+    .\\Get-EntraGroupAudit.ps1 -BulkAudit -ExportPath "C:\\temp\\group_health.csv"
+    Runs a health audit across all groups.
 
 .NOTES
-    Part of Microsoft365-Scripts toolkit - Identity,M365,Reporting
-    Exit codes: 0 = success, 1 = failure, 2 = script error
-    Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
+    - Requires Microsoft.Graph.Authentication module.
+        - Read-only; no group modifications.
+        - Logs: C:\ProgramData\Get-EntraGroupAudit\Logs\
 #>
 
 #Requires -Version 5.1
 
-Param
-(
-    [int]$InactiveDays,
-    [int]$InactiveDays_NonInteractive,
-    [switch]$ReturnNeverLoggedInUser,
-    [switch]$EnabledUsersOnly,
-    [switch]$DisabledUsersOnly,
-    [switch]$ExternalUsersOnly,
-    [switch]$CreateSession,
-    [string]$TenantId,
-    [string]$ClientId,
-    [string]$CertificateThumbprint
+[CmdletBinding(DefaultParameterSetName = 'ByName')]
+param(
+    [Parameter(Mandatory, ParameterSetName = 'ByName')]
+    [string]$GroupName,
+
+    [Parameter(Mandatory, ParameterSetName = 'ById')]
+    [string]$GroupId,
+
+    [Parameter(Mandatory, ParameterSetName = 'BulkAudit')]
+    [switch]$BulkAudit,
+
+    [Parameter(ParameterSetName = 'ByName')]
+    [Parameter(ParameterSetName = 'ById')]
+    [switch]$IncludeMembers,
+
+    [Parameter()]
+    [string]$ExportPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,14 +87,18 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'GetM365InactiveUserReport'
+$SolutionName = 'Get-EntraGroupAudit'
 $ScriptMode   = 'run'
 
 # ============================================================================
-# LOGGING BLOCK (embedded canonical Write-Log - General CLI, ProgramData only)
+# LOGGING BLOCK (embedded canonical scripts/Write-Log.ps1 - copy VERBATIM)
 # Single source of truth: Initialize-Log / Write-Banner / Write-Log / Finish-Script.
 # ============================================================================
 
+# --- Logging (CLI Configuration) --------------------------------------------
+$script:SystemDrive = if ($env:SystemDrive) { $env:SystemDrive.TrimEnd('') } else {
+    [System.IO.Path]::GetPathRoot($env:SystemRoot).TrimEnd('')
+}
 $script:LogRoot  = $null
 $script:LogFile  = $null
 $script:LogReady = $false
@@ -108,7 +129,7 @@ function Initialize-Log {
         return $true
     }
     catch {
-        Write-Host "Log initialization failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Log -Message "Log initialization failed: $($_.Exception.Message)" -Level 'ERROR'
         $script:LogReady = $false
         return $false
     }
@@ -188,127 +209,436 @@ function Finish-Script {
     }
 }
 
+# ============================================================================
+# REPORT OUTPUT ANCHORING (Law 12)
+# Anchors relative output paths beside the script using fallback chain.
+# ============================================================================
+
+$scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot }
+elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+else { (Get-Location).Path }
+
+# Resolve relative ExportPath/OutputPath beside the script (Law 12).
+if ($PSBoundParameters.ContainsKey('ExportPath') -and $ExportPath -and -not [System.IO.Path]::IsPathRooted($ExportPath)) {
+    $ExportPath = Join-Path $scriptDirectory $ExportPath
+}
+if ($PSBoundParameters.ContainsKey('OutputPath') -and $OutputPath -and -not [System.IO.Path]::IsPathRooted($OutputPath)) {
+    $OutputPath = Join-Path $scriptDirectory $OutputPath
+}
+
+
+# ============================================================================
+# MAIN ENTRY LOGGING INITIALIZATION
+# ============================================================================
+
 $null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type 'General'
 Write-Banner
+if ($script:LogReady) {
+    Write-Log -Message "Log file ready: $($script:LogFile)" -Level 'DEBUG'
+}
+Write-Log -Message "Script started: Get-EntraGroupAudit" -Level 'INFO'
 
-# ============================================================================
-# GRAPH CONNECTION - installs the Beta module on confirmation, then signs in.
-# ============================================================================
 
-# Ensures the Graph Beta module exists (prompted install) and connects; honors -CreateSession.
-Function Connect_MgGraph
-{
-    # Check if the Microsoft Graph Beta module is installed
-    $MsGraphBetaModule = Get-Module Microsoft.Graph.Beta -ListAvailable
-    if ($MsGraphBetaModule -eq $null)
-    { 
-        Write-Log -Message "⚠️ Microsoft Graph Beta module is missing. It must be installed to run the script successfully." -Level 'WARNING'
-        $confirm = Read-Host "Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No"  
-        if ($confirm -match "[yY]") 
-        { 
-            Write-Log -Message "📦 Installing Microsoft Graph Beta module..." -Level 'INFO'
-            Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
-            Write-Log -Message "✅ Microsoft Graph Beta module installed successfully." -Level 'SUCCESS'
-        } 
-        else
-        { 
-            Write-Log -Message "❌ Exiting. Microsoft Graph Beta module is required for this script." -Level 'ERROR'
-            Exit 
-        } 
+
+#region --- Helpers ---
+
+function Get-MgGraphAllPages {
+    param([string]$Uri, [string]$Method = 'GET')
+    try {
+        $response = Invoke-MgGraphRequest -Uri $Uri -Method $Method -ErrorAction Stop
+        $results = @()
+        if ($null -ne $response.value) { $results += $response.value }
+        elseif ($response) { $results += $response }
+        while ($response.'@odata.nextLink') {
+            $response = Invoke-MgGraphRequest -Uri $response.'@odata.nextLink' -Method GET -ErrorAction Stop
+            if ($null -ne $response.value) { $results += $response.value }
+        }
+        return ,$results
     }
-    
-    # Disconnect any existing Microsoft Graph sessions if requested
-    if ($CreateSession.IsPresent)
-    {
-        Disconnect-MgGraph
-    }
-    
-    # Connecting to Microsoft Graph
-    Write-Log -Message "🔗 Connecting to Microsoft Graph..." -Level 'INFO'
-    if (($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint 
-    }
-    else
-    {
-        Connect-MgGraph -Scopes "User.Read.All", "AuditLog.read.All"  
+    catch [System.Exception] {
+        # Graph call failed - logged as verbose
+        Write-Verbose "Graph call failed for $Uri : $_"
+        return @()
     }
 }
+#endregion
 
-Connect_MgGraph
-Write-Log -Message "📝 If you encounter module-related conflicts, run the script in a fresh PowerShell window." -Level 'WARNING'
+#region --- Authentication ---
+Write-Log -Message "=== AUTHENTICATION ===" -Level 'INFO'
+$context = Get-MgContext
+if (-not $context) {
+    Write-Log -Message "Connecting to Microsoft Graph..." -Level 'INFO'
+    Connect-MgGraph -Scopes @(
+        'Directory.Read.All',
+        'Group.Read.All',
+        'GroupMember.Read.All',
+        'User.Read.All'
+    ) -ErrorAction Stop
+    $context = Get-MgContext
+}
+Write-Log -Message "Signed in as: $($context.Account)" -Level 'INFO'
+#endregion
 
-# Define the CSV export path in the script's directory
-$ExportCSV = Join-Path -Path $PSScriptRoot -ChildPath "InactiveM365UserReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd hh-mm-ss tt')).csv"
-$ExportResults = @()  
+if ($BulkAudit) {
+    #region --- Bulk Audit Mode ---
+    Write-Log -Message "=== BULK GROUP HEALTH AUDIT ===" -Level 'INFO'
 
-# Retrieve inactive users
-Write-Log -Message "🔄 Retrieving inactive users from Microsoft 365..." -Level 'INFO'
-$RequiredProperties = @('UserPrincipalName', 'EmployeeId', 'DisplayName', 'CreatedDateTime', 'AccountEnabled', 'Department', 'JobTitle', 'RefreshTokensValidFromDateTime', 'SigninActivity')
-$Count = 0
-$PrintedUser = 0
+    Write-Log -Message "Fetching all groups..." -Level 'INFO'
+    $allGroups = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/groups?`$select=id,displayName,groupTypes,securityEnabled,mailEnabled,membershipRule,membershipRuleProcessingState,createdDateTime,renewedDateTime,description,isAssignableToRole"
+    Write-Log -Message "$($allGroups.Count) groups found" -Level 'INFO'
 
-Get-MgBetaUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object {
-    $Count++
-    $UPN = $_.UserPrincipalName
-    Write-Progress -Activity "🔎 Processing user: $Count - $UPN"
+    $auditReport = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $emptyCount = 0
+    $noOwnerCount = 0
+    $largeCount = 0
+    $dynamicCount = 0
+    $groupIndex = 0
 
-    # Extract user details
-    $LastInteractiveSignIn = $_.SignInActivity.LastSignInDateTime
-    $LastNon_InteractiveSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    
-    # Handle inactive days calculation
-    if ($LastInteractiveSignIn -eq $null) { $LastInteractiveSignIn = "Never Logged In"; $InactiveDays_InteractiveSignIn = "-" }
-    else { $InactiveDays_InteractiveSignIn = (New-TimeSpan -Start $LastInteractiveSignIn).Days }
-    
-    if ($LastNon_InteractiveSignIn -eq $null) { $LastNon_InteractiveSignIn = "Never Logged In"; $InactiveDays_NonInteractiveSignIn = "-" }
-    else { $InactiveDays_NonInteractiveSignIn = (New-TimeSpan -Start $LastNon_InteractiveSignIn).Days }
-    
-    $AccountStatus = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
+    foreach ($g in $allGroups) {
+        $groupIndex++
+        if ($groupIndex % 50 -eq 0) {
+            Write-Progress -Activity "Auditing groups" -Status "$groupIndex of $($allGroups.Count) - $($g.displayName)" -PercentComplete (($groupIndex / $allGroups.Count) * 100)
+        }
 
-    # Export to CSV and collect the same row for the HTML dashboard.
-    [PSCustomObject]@{
-        
-        'UPN' = $UPN; 'Creation Date' = $_.CreatedDateTime; 'Last Interactive SignIn Date' = $LastInteractiveSignIn;
-        'Last Non Interactive SignIn Date' = $LastNon_InteractiveSignIn; 'Inactive Days(Interactive SignIn)' = $InactiveDays_InteractiveSignIn;
-        'Inactive Days(Non-Interactive Signin)' = $InactiveDays_NonInteractiveSignIn; 'Account Status' = $AccountStatus;
-        'Department' = $_.Department; 'Employee ID' = $_.EmployeeId; 'Employee Name' = $_.DisplayName; 'Job Title' = $_.JobTitle
-    } | ForEach-Object { $ExportResults += $_; $_ } | Export-Csv -Path $ExportCSV -NoTypeInformation -Encoding UTF8 -Append
+        # Classify group type
+        $isDynamic = $g.groupTypes -contains 'DynamicMembership'
+        $isM365 = $g.groupTypes -contains 'Unified'
+        $groupTypeLabel = if ($isM365 -and $isDynamic) { 'M365 Dynamic' }
+                          elseif ($isM365) { 'M365 Assigned' }
+                          elseif ($isDynamic -and $g.securityEnabled) { 'Security Dynamic' }
+                          elseif ($g.securityEnabled -and $g.mailEnabled) { 'Mail-Enabled Security' }
+                          elseif ($g.securityEnabled) { 'Security Assigned' }
+                          elseif ($g.mailEnabled) { 'Distribution' }
+                          else { 'Other' }
+
+        if ($isDynamic) { $dynamicCount++ }
+
+        # Get member count (using $count for efficiency)
+        $memberCount = 0
+        try {
+            $countResult = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/groups/$($g.id)/members/`$count" -Method GET -Headers @{ 'ConsistencyLevel' = 'eventual' } -ErrorAction Stop
+            $memberCount = [int]$countResult
+        } catch [System.Exception] { # typed catch - handles Graph or runtime errors
+            # Fallback - fetch a page and count
+            $membersPage = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/groups/$($g.id)/members?`$top=1&`$select=id"
+            $memberCount = $membersPage.Count
+        }
+
+        if ($memberCount -eq 0) { $emptyCount++ }
+        if ($memberCount -ge 500) { $largeCount++ }
+
+        # Get owner count
+        $owners = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/groups/$($g.id)/owners?`$select=id,displayName"
+        $ownerCount = $owners.Count
+        $ownerNames = ($owners | ForEach-Object { $_.displayName }) -join '; '
+        if ($ownerCount -eq 0) { $noOwnerCount++ }
+
+        # Determine age
+        $groupAge = if ($g.createdDateTime) { [math]::Round(((Get-Date) - [datetime]$g.createdDateTime).TotalDays) } else { 'N/A' }
+
+        # Issues detection
+        $issues = @()
+        if ($memberCount -eq 0) { $issues += 'Empty group' }
+        if ($ownerCount -eq 0) { $issues += 'No owners' }
+        if ($memberCount -ge 5000) { $issues += 'Very large (5000+)' }
+        if ($isDynamic -and $g.membershipRuleProcessingState -eq 'Paused') { $issues += 'Dynamic rule paused' }
+
+        $auditReport.Add([PSCustomObject]@{
+            GroupName             = $g.displayName
+            GroupType             = $groupTypeLabel
+            MemberCount           = $memberCount
+            OwnerCount            = $ownerCount
+            Owners                = if ($ownerNames) { $ownerNames } else { '-' }
+            SecurityEnabled       = $g.securityEnabled
+            MailEnabled           = $g.mailEnabled
+            IsRoleAssignable      = $g.isAssignableToRole
+            IsDynamic             = $isDynamic
+            MembershipRule        = if ($g.membershipRule) { $g.membershipRule } else { '-' }
+            RuleProcessingState   = if ($g.membershipRuleProcessingState) { $g.membershipRuleProcessingState } else { '-' }
+            CreatedDateTime       = $g.createdDateTime
+            GroupAgeDays          = $groupAge
+            Description           = if ($g.description) { $g.description } else { '-' }
+            Issues                = if ($issues.Count -gt 0) { $issues -join '; ' } else { '-' }
+            GroupId               = $g.id
+        })
+    }
+
+    Write-Progress -Activity "Auditing groups" -Completed
+
+    # Summary
+    Write-Log -Message "=== GROUP HEALTH SUMMARY ===" -Level 'INFO'
+    Write-Log -Message "Total groups       : $($allGroups.Count)" -Level 'INFO'
+
+    # Type breakdown
+    Write-Log -Message "--- Group Types ---" -Level 'WARNING'
+    $typeGroups = $auditReport | Group-Object GroupType | Sort-Object Count -Descending
+    foreach ($tg in $typeGroups) {
+        Write-Log -Message "$($tg.Name) : $($tg.Count)" -Level 'INFO'
+    }
+
+    # Health flags
+    Write-Log -Message "--- Health Flags ---" -Level 'WARNING'
+    Write-Log -Message "Empty groups (0 members)  : $emptyCount" -Level 'INFO'
+    Write-Log -Message "No owners assigned        : $noOwnerCount" -Level 'INFO'
+    Write-Log -Message "Large groups (500+)       : $largeCount" -Level 'INFO'
+    Write-Log -Message "Dynamic groups            : $dynamicCount" -Level 'INFO'
+
+    # Show empty groups
+    $emptyGroups = $auditReport | Where-Object { $_.MemberCount -eq 0 } | Sort-Object GroupName
+    if ($emptyGroups.Count -gt 0) {
+        Write-Log -Message "=== EMPTY GROUPS ($($emptyGroups.Count)) ===" -Level 'INFO'
+        foreach ($eg in ($emptyGroups | Select-Object -First 20)) {
+            Write-Log -Message "$($eg.GroupName)" -Level 'WARNING'
+            Write-Log -Message "| $($eg.GroupType) | Age: $($eg.GroupAgeDays)d" -Level 'DEBUG'
+        }
+        if ($emptyGroups.Count -gt 20) {
+            Write-Log -Message "... and $($emptyGroups.Count - 20) more" -Level 'DEBUG'
+        }
+    }
+
+    # Show ownerless groups
+    $ownerlessGroups = $auditReport | Where-Object { $_.OwnerCount -eq 0 } | Sort-Object GroupName
+    if ($ownerlessGroups.Count -gt 0) {
+        Write-Log -Message "=== GROUPS WITH NO OWNERS ($($ownerlessGroups.Count)) ===" -Level 'INFO'
+        foreach ($og in ($ownerlessGroups | Select-Object -First 20)) {
+            Write-Log -Message "$($og.GroupName)" -Level 'WARNING'
+            Write-Log -Message "| $($og.GroupType) | Members: $($og.MemberCount)" -Level 'DEBUG'
+        }
+        if ($ownerlessGroups.Count -gt 20) {
+            Write-Log -Message "... and $($ownerlessGroups.Count - 20) more" -Level 'DEBUG'
+        }
+    }
+
+    # Dual export: raw CSV plus Carbon Dark HTML dashboard (shared timestamp).
+    if ($auditReport.Count -gt 0) {
+        $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+        $csvPath = if ($ExportPath) { $ExportPath } else { Join-Path $scriptDirectory "GroupHealthAudit_$stamp.csv" }
+        $htmlPath = [System.IO.Path]::ChangeExtension($csvPath, '.html')
+        $auditReport | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+
+        # Defensive re-collection: $auditReport must survive for the HTML table (Rule 26).
+        $htmlRows = @($auditReport)
+        if (-not $htmlRows) { $htmlRows = @() }
+        $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
+            $issueBadge = if ($rowRef.Issues -and $rowRef.Issues -ne '-') { 'high' } else { 'low' }
+            '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.GroupName)") + '</code></td>' +
+            '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.GroupType)") + '</td>' +
+            '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.MemberCount)") + '</td>' +
+            '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.OwnerCount)") + '</td>' +
+            '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.GroupAgeDays)") + '</td>' +
+            '<td><span class="badge ' + $issueBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Issues)") + '</span></td></tr>'
+        }
+        $tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) groups; full data is in the CSV.</p>" } else { '' }
+        $tableHtml = '<div class="section-title">Group Health Detail</div>' +
+            '<div class="card"><h2>All Groups (' + $htmlRows.Count + ')</h2>' +
+            '<table><thead><tr><th>Group</th><th>Type</th><th>Members</th><th>Owners</th><th>Age (days)</th><th>Issues</th></tr></thead><tbody>' +
+            ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
+
+        $kpis = @(
+            @{ value = "$($auditReport.Count)"; label = 'Groups audited'; color = '' },
+            @{ value = "$emptyCount"; label = 'Empty groups'; color = '#da1e28' },
+            @{ value = "$noOwnerCount"; label = 'Groups without owners'; color = '#f1c21b' },
+            @{ value = "$dynamicCount"; label = 'Dynamic groups'; color = '#0f62fe' },
+            @{ value = "$largeCount"; label = 'Large groups (500+)'; color = '#8a3ffc' }
+        )
+        $mgContext = try { Get-MgContext } catch [System.Exception] { $null }
+        $tenantId = if ($mgContext) { $mgContext.TenantId } else { '' }
+        Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Group Health Audit' -Subtitle ("Groups: $($auditReport.Count) | Empty: $emptyCount | Ownerless: $noOwnerCount") `
+            -Tenant $tenantId -Body $tableHtml -Kpis $kpis -Version '1.0.1' -ReportName 'Group Health Audit'
+        Write-Log -Message "CSV:  $csvPath ($($auditReport.Count) rows)" -Level 'INFO'
+        Write-Log -Message "HTML: $htmlPath" -Level 'INFO'
+    }
+    #endregion
+
+} else {
+    #region --- Single Group Deep Dive ---
+    Write-Log -Message "=== RESOLVING GROUP ===" -Level 'INFO'
+
+    if ($GroupName) {
+        Write-Log -Message "Searching for group: $GroupName" -Level 'INFO'
+        $groups = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$($GroupName -replace "'","''")'"
+        if ($groups.Count -eq 0) {
+            Write-Log -Message "ERROR: Group '$GroupName' not found." -Level 'ERROR'
+            return
+        }
+        $group = $groups[0]
+    } else {
+        Write-Log -Message "Looking up group ID: $GroupId" -Level 'INFO'
+        $group = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/groups/$GroupId"
+        if (-not $group -or $group.Count -eq 0) {
+            Write-Log -Message "ERROR: Group ID '$GroupId' not found." -Level 'ERROR'
+            return
+        }
+        if ($group -is [array]) { $group = $group[0] }
+    }
+
+    $gId = $group.id
+    $isDynamic = $group.groupTypes -contains 'DynamicMembership'
+    $isM365 = $group.groupTypes -contains 'Unified'
+    $groupTypeLabel = if ($isM365 -and $isDynamic) { 'M365 Dynamic' }
+                      elseif ($isM365) { 'M365 Assigned' }
+                      elseif ($isDynamic -and $group.securityEnabled) { 'Security Dynamic' }
+                      elseif ($group.securityEnabled -and $group.mailEnabled) { 'Mail-Enabled Security' }
+                      elseif ($group.securityEnabled) { 'Security Assigned' }
+                      elseif ($group.mailEnabled) { 'Distribution' }
+                      else { 'Other' }
+
+    Write-Log -Message "Group Name         : $($group.displayName)" -Level 'INFO'
+    Write-Log -Message "Group ID           : $gId" -Level 'INFO'
+    Write-Log -Message "Group Type         : $groupTypeLabel" -Level 'INFO'
+    Write-Log -Message "Security Enabled   : $($group.securityEnabled)" -Level 'INFO'
+    Write-Log -Message "Mail Enabled       : $($group.mailEnabled)" -Level 'INFO'
+    Write-Log -Message "Role Assignable    : $($group.isAssignableToRole)" -Level 'INFO'
+    Write-Log -Message "Created            : $($group.createdDateTime)" -Level 'INFO'
+    if ($group.description) {
+        Write-Log -Message "Description        : $($group.description)" -Level 'INFO'
+    }
+    if ($isDynamic -and $group.membershipRule) {
+        Write-Log -Message "Membership Rule    : $($group.membershipRule)" -Level 'INFO'
+        Write-Log -Message "Rule Processing    : $($group.membershipRuleProcessingState)" -Level 'INFO'
+    }
+
+    # --- Owners ---
+    Write-Log -Message "=== GROUP OWNERS ===" -Level 'INFO'
+    $owners = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/groups/$gId/owners?`$select=id,displayName,userPrincipalName,@odata.type"
+    if ($owners.Count -eq 0) {
+        Write-Log -Message "No owners assigned." -Level 'WARNING'
+    } else {
+        Write-Log -Message "$($owners.Count) owner(s):" -Level 'INFO'
+        foreach ($o in $owners) {
+            $ownerType = switch -Wildcard ($o.'@odata.type') { '*user*' { 'User' } ; '*servicePrincipal*' { 'App' } ; default { '' } }
+            Write-Log -Message "$($o.displayName)" -Level 'INFO'
+            Write-Log -Message "($($o.userPrincipalName)) [$ownerType]" -Level 'INFO'
+        }
+    }
+
+    # --- Members ---
+    Write-Log -Message "=== GROUP MEMBERS ===" -Level 'INFO'
+    $members = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/groups/$gId/members?`$select=id,displayName,userPrincipalName,mail,@odata.type,accountEnabled,deviceId,operatingSystem"
+
+    $userMembers = $members | Where-Object { $_.'@odata.type' -eq '#microsoft.graph.user' }
+    $deviceMembers = $members | Where-Object { $_.'@odata.type' -eq '#microsoft.graph.device' }
+    $groupMembers = $members | Where-Object { $_.'@odata.type' -eq '#microsoft.graph.group' }
+    $spMembers = $members | Where-Object { $_.'@odata.type' -eq '#microsoft.graph.servicePrincipal' }
+
+    Write-Log -Message "Total members      : $($members.Count)" -Level 'INFO'
+    Write-Log -Message "Users              : $($userMembers.Count)" -Level 'INFO'
+    Write-Log -Message "Devices            : $($deviceMembers.Count)" -Level 'INFO'
+    Write-Log -Message "Nested groups      : $($groupMembers.Count)" -Level 'INFO'
+    Write-Log -Message "Service principals : $($spMembers.Count)" -Level 'INFO'
+
+    # Show nested groups
+    if ($groupMembers.Count -gt 0) {
+        Write-Log -Message "Nested groups:" -Level 'WARNING'
+        foreach ($ng in $groupMembers) {
+            Write-Log -Message "$($ng.displayName) ($($ng.id))" -Level 'INFO'
+        }
+    }
+
+    # User account status
+    if ($userMembers.Count -gt 0) {
+        $disabledUsers = $userMembers | Where-Object { $_.accountEnabled -eq $false }
+        if ($disabledUsers.Count -gt 0) {
+            Write-Log -Message "WARNING: $($disabledUsers.Count) disabled user account(s) in this group:" -Level 'WARNING'
+            foreach ($du in ($disabledUsers | Select-Object -First 10)) {
+                Write-Log -Message "$($du.displayName) ($($du.userPrincipalName))" -Level 'INFO'
+            }
+            if ($disabledUsers.Count -gt 10) {
+                Write-Log -Message "... and $($disabledUsers.Count - 10) more" -Level 'DEBUG'
+            }
+        }
+    }
+
+    # Device OS breakdown
+    if ($deviceMembers.Count -gt 0) {
+        Write-Log -Message "Device OS breakdown:" -Level 'WARNING'
+        $osGroups = $deviceMembers | Group-Object operatingSystem | Sort-Object Count -Descending
+        foreach ($os in $osGroups) {
+            Write-Log -Message "$($os.Name) : $($os.Count)" -Level 'INFO'
+        }
+    }
+
+    # --- Parent Groups (nesting) ---
+    Write-Log -Message "=== PARENT GROUP MEMBERSHIPS ===" -Level 'INFO'
+    $parentGroups = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/groups/$gId/transitiveMemberOf?`$select=id,displayName,@odata.type"
+    $parentGroupList = $parentGroups | Where-Object { $_.'@odata.type' -eq '#microsoft.graph.group' }
+
+    if ($parentGroupList.Count -eq 0) {
+        Write-Log -Message "This group is not nested inside any other groups." -Level 'DEBUG'
+    } else {
+        Write-Log -Message "Nested inside $($parentGroupList.Count) parent group(s):" -Level 'INFO'
+        foreach ($pg in $parentGroupList) {
+            Write-Log -Message "$($pg.displayName) ($($pg.id))" -Level 'INFO'
+        }
+    }
+
+    # --- License Assignments ---
+    Write-Log -Message "=== LICENSE ASSIGNMENTS ===" -Level 'INFO'
+    try {
+        $groupDetail = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/groups/$gId`?`$select=assignedLicenses" -ErrorAction Stop
+        if ($groupDetail.assignedLicenses -and $groupDetail.assignedLicenses.Count -gt 0) {
+            Write-Log -Message "$($groupDetail.assignedLicenses.Count) license(s) assigned to this group:" -Level 'INFO'
+            # Resolve SKU IDs to names
+            $skus = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/subscribedSkus?`$select=skuId,skuPartNumber"
+            $skuMap = @{}
+            foreach ($sku in $skus) { $skuMap[$sku.skuId] = $sku.skuPartNumber }
+
+            foreach ($lic in $groupDetail.assignedLicenses) {
+                $skuName = if ($skuMap.ContainsKey($lic.skuId)) { $skuMap[$lic.skuId] } else { $lic.skuId }
+                $disabledPlans = if ($lic.disabledPlans -and $lic.disabledPlans.Count -gt 0) { " ($($lic.disabledPlans.Count) plans disabled)" } else { '' }
+                Write-Log -Message "$skuName$disabledPlans" -Level 'INFO'
+            }
+        } else {
+            Write-Log -Message "No licenses assigned to this group." -Level 'DEBUG'
+        }
+    } catch [System.Exception] { # typed catch - handles Graph or runtime errors
+        Write-Log -Message "Could not retrieve license information." -Level 'DEBUG'
+    }
+
+    # --- Export Members ---
+    if ($IncludeMembers -and $members.Count -gt 0) {
+        $memberReport = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+        foreach ($m in $members) {
+            $memberType = switch -Wildcard ($m.'@odata.type') {
+                '*user*'             { 'User' }
+                '*device*'           { 'Device' }
+                '*group*'            { 'Nested Group' }
+                '*servicePrincipal*' { 'Service Principal' }
+                default              { 'Unknown' }
+            }
+
+            $memberReport.Add([PSCustomObject]@{
+                GroupName         = $group.displayName
+                GroupId           = $gId
+                GroupType         = $groupTypeLabel
+                MemberName        = $m.displayName
+                MemberType        = $memberType
+                UserPrincipalName = if ($m.userPrincipalName) { $m.userPrincipalName } else { '-' }
+                Mail              = if ($m.mail) { $m.mail } else { '-' }
+                AccountEnabled    = if ($null -ne $m.accountEnabled) { $m.accountEnabled } else { '-' }
+                OperatingSystem   = if ($m.operatingSystem) { $m.operatingSystem } else { '-' }
+                MemberId          = $m.id
+            })
+        }
+
+        if ($ExportPath) {
+            $memberReport | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
+            Write-Log -Message "Exported $($memberReport.Count) members to: $ExportPath" -Level 'INFO'
+        } else {
+            $safeName = $group.displayName -replace '[^\w\-]','_'
+            $defaultPath = Join-Path $scriptDirectory "$safeName`_Members_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+            $memberReport | Export-Csv -Path $defaultPath -NoTypeInformation -Encoding UTF8
+            Write-Log -Message "Auto-exported $($memberReport.Count) members to: $defaultPath" -Level 'INFO'
+        }
+    } elseif (-not $IncludeMembers -and $members.Count -gt 0) {
+        Write-Log -Message "Use -IncludeMembers to export the full member list to CSV" -Level 'INFO'
+    }
+    #endregion
 }
 
-# Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
-$htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
-$htmlRows = @($ExportResults)
-$tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    $statusBadge = if ("$($rowRef.'Account Status')" -eq 'Disabled') { 'medium' } else { 'low' }
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UPN)") + '</code></td>' +
-    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Account Status')") + '</span></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Last Interactive SignIn Date')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Inactive Days(Interactive SignIn)')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Department)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Job Title')") + '</td></tr>'
-}
-$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Inactive User Detail</div>' +
-    '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>UPN</th><th>Status</th><th>Last Interactive Sign-In</th><th>Inactive Days</th><th>Department</th><th>Job Title</th></tr></thead><tbody>' +
-    ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
-
-$disabledCount = @($htmlRows | Where-Object { $_."Account Status" -eq 'Disabled' }).Count
-$neverCount = @($htmlRows | Where-Object { $_."Last Interactive SignIn Date" -eq 'Never Logged In' }).Count
-$kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
-    @{ value = "$disabledCount"; label = 'Disabled users'; color = '#f1c21b' },
-    @{ value = "$neverCount"; label = 'Never logged in'; color = '#da1e28' }
-)
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 Inactive User Report' -Subtitle ("Users: $($htmlRows.Count) | Disabled: $disabledCount | Never logged in: $neverCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 Inactive User Report'
-
-# Final message
-Write-Log -Message "✅ Script executed successfully. Exported report has $($htmlRows.Count) user(s)." -Level 'SUCCESS'
-Write-Log -Message "📄 CSV:  $ExportCSV" -Level 'WARNING'
-Write-Log -Message "📄 HTML: $htmlPath" -Level 'WARNING'
-Invoke-Item "$ExportCSV"
+Write-Log -Message "`n$('='*60)" -Level 'DEBUG'
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).

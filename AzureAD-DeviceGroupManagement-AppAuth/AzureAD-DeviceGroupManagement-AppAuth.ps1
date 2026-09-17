@@ -1,6 +1,6 @@
 <#
 .TITLE
-    AzureAD-DeviceGroupManagement - Manage static Azure AD groups for Intune devices
+    AzureAD-DeviceGroupManagement-AppAuth - Manage static Azure AD groups via app auth
 
 .SYNOPSIS
     Manages static Azure AD groups by adding devices from Intune to these groups.
@@ -33,12 +33,12 @@
     2026-09-16
 
 .EXAMPLE
-    .\AzureAD-DeviceGroupManagement.ps1
-    Groups Intune devices into static groups honoring the 500-member cap.
+    .\AzureAD-DeviceGroupManagement-AppAuth.ps1
+    Groups Intune devices into static groups using app-based authentication.
 
 .EXAMPLE
-    .\AzureAD-DeviceGroupManagement.ps1 -BatchSize 300 -GroupNamePrefix "CorporateDevices-" -EnableLogging
-    Groups devices 300 per group with logging enabled.
+    .\AzureAD-DeviceGroupManagement-AppAuth.ps1 -GroupNamePrefix "CorpDevices-" -NamePadding 3 -EnableLogging -LogFilePath "D:\Logs\DeviceGroups.log"
+    Unattended run with custom prefix, numbering width, and log file.
 
 .NOTES
     Manages static groups only; store the App Secret securely.
@@ -51,8 +51,8 @@
 Param (
     [int]$BatchSize = 500,
     [string]$GroupNamePrefix = "Devices-group",
-    [int]$NamePadding = 2,  # Number of digits in group numbering
-    [switch]$EnableLogging, # Enable logging to a file
+    [int]$NamePadding = 2,    # Number of digits in group numbering
+    [switch]$EnableLogging,   # Enable logging to a file
     [string]$LogFilePath = "GroupCreationLog.txt"
 )
 
@@ -62,10 +62,11 @@ $ErrorActionPreference = 'Stop'
 $scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
 if ($LogFilePath -and -not [System.IO.Path]::IsPathRooted($LogFilePath)) { $LogFilePath = Join-Path $scriptDirectory $LogFilePath }
 
-# ============================================================================
-# LOCAL LOGGER - timestamped, color-coded console lines with optional file log.
-# why: this legacy tool predates the canonical Write-Log block; keep behavior.
-# ============================================================================
+
+# Automatically Connect to Microsoft Graph using App-based Authentication
+$tenantID      = "xxxxxxxxxxxxxxxxxxxx"  # replace with your actual Tenant ID
+$appID         = "xxxxxxxxxxxxxxxxxxxx"  # replace with your actual App ID
+$appSecret     = "xxxxxxxxxxxxxxxxxxxx"  # replace with your actual Client Secret as plain text
 
 # Writes one timestamped, color-coded line to console and optionally to file.
 Function Log-Message {
@@ -94,6 +95,7 @@ Function Log-Message {
     }
 }
 
+# Connect to Microsoft Graph
 
 # Install and Import Microsoft Graph Modules
 Log-Message "Installing Microsoft Graph modules if required (current user scope)" -MessageType "INFO"
@@ -124,16 +126,105 @@ if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Beta.DeviceManagement.
     Log-Message "Microsoft Graph Beta Device Management Module Already Installed" -MessageType "SUCCESS"
 }
 
+# Install Azure Powershell module if not installed
+if (-not (Get-Module -ListAvailable -Name Az)) {
+    try {
+        Install-Module -Name Az -Scope CurrentUser -Repository PSGallery -Force
+        Log-Message "Az Module Installed Successfully" -MessageType "SUCCESS"
+    } catch {
+        Log-Message "Failed to Install Az Module: $($_.Exception.Message)" -MessageType "ERROR"
+        exit
+    }
+} else {
+    Log-Message "Az Module Already Installed" -MessageType "SUCCESS"
+}
+
+
 # Import necessary modules
 Import-Module Microsoft.Graph.Authentication
 Import-Module Microsoft.Graph.Beta.DeviceManagement.Actions
+Import-Module Az
 
 
 # Authenticate with an MFA enabled account
 Connect-MgGraph -Scopes "DeviceManagementConfiguration.ReadWrite.All"
 
+
+# Connects to Graph with client credentials; falls back to interactive on failure.
+function Connect-ToGraph {
+    param (
+        [Parameter(Mandatory = $false)] [string]$Tenant,
+        [Parameter(Mandatory = $false)] [string]$AppId,
+        [Parameter(Mandatory = $false)] [string]$AppSecret,
+        [Parameter(Mandatory = $false)] [string]$Scopes = "DeviceManagementConfiguration.ReadWrite.All"
+    )
+
+    $version = (Get-Module microsoft.graph.authentication).Version.Major
+
+    if ($AppId) {
+        # App-based Authentication
+        $body = @{
+            grant_type    = "client_credentials"
+            client_id     = $AppId
+            client_secret = $AppSecret
+            scope         = "https://graph.microsoft.com/.default"
+        }
+
+        $response = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$Tenant/oauth2/v2.0/token" -Body $body
+        $accessToken = $response.access_token
+
+        if ($version -eq 2) {
+            Log-Message "Version 2 module detected" -MessageType "WARNING"
+            $accessTokenFinal = ConvertTo-SecureString -String $accessToken -AsPlainText -Force
+        } else {
+            Log-Message "Version 1 Module Detected" -MessageType "WARNING"
+            Select-MgProfile -Name Beta
+            $accessTokenFinal = $accessToken
+        }
+        Connect-MgGraph -AccessToken $accessTokenFinal
+        Log-Message "Connected to Intune tenant $Tenant using App-based Authentication" -MessageType "SUCCESS"
+    } else {
+        # User-based Authentication
+        if ($version -eq 2) {
+            Log-Message "Version 2 module detected" -MessageType "WARNING"
+        } else {
+            Log-Message "Version 1 Module Detected" -MessageType "WARNING"
+            Select-MgProfile -Name Beta
+        }
+        Connect-MgGraph -Scopes $Scopes
+        Log-Message "Connected to Intune tenant $((Get-MgTenant).TenantId)" -MessageType "SUCCESS"
+    }
+}
+
+# Connect to Microsoft Graph
+Connect-ToGraph -Tenant $tenantID -AppId $appID -AppSecret $appSecret
+
+
+# Connects to Azure AD with the service principal non-interactively.
+function Connect-ToAzureAD {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$TenantID,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppID,  # ClientID
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppSecret  # Client Secret Value
+    )
+
+    # Connect using AzureAD module
+    $AzureADToken = Connect-AzAccount -ServicePrincipal -TenantId $TenantID -ApplicationId $AppID -Credential (New-Object PSCredential($AppID, (ConvertTo-SecureString $AppSecret -AsPlainText -Force)))
+
+    if ($AzureADToken) {
+        Log-Message "Connected to Azure AD!" -MessageType "SUCCESS"
+    } else {
+        Write-Error "Failed to authenticate to Azure AD."
+    }
+}
+
 # Connect to AzureAD
-Connect-AzureAD
+Connect-ToAzureAD -Tenant $tenantID -AppId $appID -AppSecret $appSecret
 
 # Computes the next zero-padded group number from existing prefixed names.
 Function Get-NextGroupNumber {

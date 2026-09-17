@@ -1,24 +1,24 @@
 <#
 .TITLE
-    HybridUserAudit - Full hybrid user audit from Active Directory and Entra ID
+    Get-GuestUserReport - Export guest users and group memberships via Microsoft Graph
 
 .SYNOPSIS
-    Generates a full hybrid user audit report from Active Directory and Microsoft Entra ID.
+    Export Office 365 Guest Users and Their Group Memberships using Microsoft Graph
 
 .DESCRIPTION
-    This PowerShell script collects all user accounts from both on-premises Active Directory and Microsoft Entra ID (formerly Azure AD),
-    matches them by username, and generates a merged audit report. For each user, it extracts attributes such as display name, email,
-    department, job title, creation date, last logon (from AD and Entra), password last set, and account status.
+    This PowerShell script connects to Microsoft Graph using the Microsoft.Graph module to retrieve
+    all guest users in the Microsoft 365 tenant. It then collects key attributes such as display name,
+    UPN, email, creation date, creation type, company (guessed from domain if not provided), and
+    invitation status. Additionally, it fetches the group memberships for each guest user.
 
-    The script:
-    - Shows real-time progress while processing each user.
-    - Exports the results to a UTF-8 encoded CSV file under Reports\ beside the script.
-    - Logs all output to a .txt file for auditing.
-    - Automatically creates the Reports\ folder beside the script if it does not exist.
-    - Is optimized to run in PowerShell ISE 5.1.
+    Optional parameters allow filtering guests based on account age, such as listing only recently
+    added or long-standing guests.
+
+    The result is exported to a CSV file in Reports\ beside the script, with a timestamp in the filename.
+    After exporting, the script prompts the user to open the CSV.
 
 .TAGS
-    Identity,M365,Hybrid
+    Identity,M365,Guests
 
 .PLATFORM
     Windows 10/11/Server 2019+
@@ -39,141 +39,308 @@
     2026-09-16
 
 .EXAMPLE
-    .\HybridUserAudit.ps1
-    Runs the full hybrid user audit and writes the CSV report.
+    .\Get-GuestUserReport.ps1 -StaleGuests 180
+    Exports only guest users older than 180 days.
 
 .EXAMPLE
-    Get-Help .\HybridUserAudit.ps1 -Full
-    Shows output column definitions and log file locations.
+    .\Get-GuestUserReport.ps1 -RecentlyCreatedGuests 30
+    Exports only guest users created in the last 30 days.
 
 .NOTES
-    Part of Microsoft365-Scripts toolkit - Identity,M365,Hybrid
+    Part of Microsoft365-Scripts toolkit - Identity,M365,Guests
     Exit codes: 0 = success, 1 = failure, 2 = script error
     Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
 #>
 
 #Requires -Version 5.1
 
+Param (
+    [Parameter(Mandatory = $false)]
+    [int]$StaleGuests,                # Only include users older than this many days
+    [int]$RecentlyCreatedGuests       # Only include users newer than this many days
+)
+
 $ErrorActionPreference = 'Stop'
 
-# =============================== Load Required PowerShell Modules ===============================
-Import-Module ActiveDirectory -ErrorAction Stop               # For querying local AD users
-Import-Module Microsoft.Graph.Users -ErrorAction Stop         # For querying Microsoft Entra ID users
+# ============================================================================
+# CONFIGURATION - solution identity for the embedded logging block.
+# ============================================================================
 
-# =============================== Connect to Microsoft Graph ===============================
-Write-Host "🔄 Connecting to Microsoft Graph..." -ForegroundColor Cyan
-Connect-MgGraph -Scopes "User.Read.All", "Directory.Read.All" -NoWelcome
-Write-Host "✅ Connected to Microsoft Graph.`n" -ForegroundColor Green
+$SolutionName = 'Get-GuestUserReport'
+$ScriptMode   = 'run'
 
-# =============================== Setup Export Paths (beside the script, Law 12) ===============================
+# ============================================================================
+# LOGGING BLOCK (embedded canonical Write-Log - General CLI, ProgramData only)
+# Single source of truth: Initialize-Log / Write-Banner / Write-Log / Finish-Script.
+# ============================================================================
+
+$script:LogRoot  = $null
+$script:LogFile  = $null
+$script:LogReady = $false
+
+# Creates the ProgramData log folder/file and reports readiness (Type 3 general CLI).
+function Initialize-Log {
+    [CmdletBinding()]
+    param(
+        [string]$SolutionName = 'EnterpriseAdminTool',
+        [string]$ScriptMode = 'run',
+        [ValidateSet('General')]
+        [string]$Type = 'General'
+    )
+
+    try {
+        # General CLI logs to ProgramData only (Type 2 pair folder not used here).
+        $script:LogRoot = Join-Path $env:ProgramData "$SolutionName\Logs"
+        $script:LogFile = Join-Path $script:LogRoot "$SolutionName`_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+
+        if (-not (Test-Path -LiteralPath $script:LogRoot)) {
+            $null = [System.IO.Directory]::CreateDirectory($script:LogRoot)
+        }
+        if (-not (Test-Path -LiteralPath $script:LogFile)) {
+            $null = [System.IO.File]::Create($script:LogFile).Dispose()
+        }
+
+        $script:LogReady = $true
+        return $true
+    }
+    catch {
+        Write-Host "Log initialization failed: $($_.Exception.Message)" -ForegroundColor Red
+        $script:LogReady = $false
+        return $false
+    }
+}
+
+# Writes the solution banner to console and log file.
+function Write-Banner {
+    [CmdletBinding()]
+    [Alias('Show-Banner')]
+    param()
+
+    $title      = '{0} | {1} | {2}' -f $SolutionName, $ScriptMode, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    $bannerLine = '=' * 78
+    $lines      = @('', $bannerLine, $title, $bannerLine)
+
+    foreach ($line in $lines) {
+        if ($line -eq $title) {
+            Write-Host $line -ForegroundColor White
+        } else {
+            Write-Host $line -ForegroundColor DarkGray
+        }
+
+        if ($script:LogReady -and $script:LogFile) {
+            Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue -WhatIf:$false
+        }
+    }
+}
+
+# Writes one timestamped, level-colored line to console and log file.
+function Write-Log {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowEmptyString()]
+        [string]$Message = "",
+        [ValidateSet("INFO", "SUCCESS", "WARNING", "ERROR", "DEBUG")]
+        [string]$Level = "INFO"
+    )
+
+    if ([string]::IsNullOrEmpty($Message)) { return }
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    # Console = clean, no timestamp/level prefix - color alone conveys severity.
+    # File    = detailed - keeps [timestamp] [LEVEL] for fleet troubleshooting.
+    $fileLine  = "[$timestamp] [$Level] $Message"
+
+    $color = switch ($Level) {
+        "DEBUG"   { "DarkGray" }
+        "INFO"    { "Cyan" }
+        "SUCCESS" { "Green" }
+        "WARNING" { "Yellow" }
+        "ERROR"   { "Red" }
+    }
+    Write-Host $Message -ForegroundColor $color
+
+    if ($script:LogReady -and $script:LogFile) {
+        Add-Content -LiteralPath $script:LogFile -Value $fileLine -Encoding UTF8 -ErrorAction SilentlyContinue -WhatIf:$false
+    }
+}
+
+# Logs the final message and terminates with the given exit code.
+function Finish-Script {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$ExitCode,
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+        [ValidateSet("INFO", "SUCCESS", "WARNING", "ERROR", "DEBUG")]
+        [string]$Level = "INFO",
+        [switch]$NoExit
+    )
+
+    Write-Log -Message $Message -Level $Level
+    if (-not $NoExit) {
+        exit $ExitCode
+    }
+}
+
+$null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type 'General'
+Write-Banner
+
+# ============================================================================
+# PREREQUISITES - output folder, Graph module, and interactive sign-in.
+# ============================================================================
+
+# Anchor outputs beside the script (Law 12).
 $scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
-$timestamp  = Get-Date -Format "yyyy-MM-dd_HH-mm"
-$reportPath = Join-Path $scriptDirectory "Reports"
-if (-not (Test-Path $reportPath)) {
-    New-Item -Path $reportPath -ItemType Directory -Force | Out-Null
+$reportsDirectory = Join-Path $scriptDirectory 'Reports'
+if (-not (Test-Path -LiteralPath $reportsDirectory)) { $null = [System.IO.Directory]::CreateDirectory($reportsDirectory) }
+
+# Ensure Microsoft.Graph is installed
+if (-not (Get-Module -ListAvailable -Name Microsoft.Graph)) {
+    Write-Log -Message "Microsoft.Graph module not found. Installing..." -Level 'WARNING'
+    Install-Module Microsoft.Graph -Scope CurrentUser -Force
+    Import-Module Microsoft.Graph
 }
 
-$csvPath = "$reportPath\FullUserReport_$timestamp.csv"
-$logPath = "$reportPath\HybridUserAuditLog_$timestamp.txt"
+# Connect to Graph
 
-# =============================== Define CSV Column Order ===============================
-$columns = @(
-    'Username','DisplayName','Department','Title','Email',
-    'InAD','AD_Enabled','AD_Created','AD_LastLogon','AD_WhenChanged','AD_PwdLastSet','AD_Description','AD_DistinguishedName',
-    'InEntraID','Entra_Enabled','Entra_Created','Entra_LastInteractiveSignIn','Entra_LastNonInteractiveSignIn'
-)
+Connect-MgGraph
+Write-Log -Message "✅ Connected to Microsoft Graph" -Level 'SUCCESS'
 
-# =============================== Initialize CSV with Headers ===============================
-$htmlRows = @()
-@() | Select-Object $columns | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+# Collection state (export paths are resolved at export time for a shared CSV/HTML timestamp).
+$Results = @()
+$Counter = 0
 
-# =============================== Start Logging Output ===============================
-Start-Transcript -Path $logPath -Append
+# ============================================================================
+# COLLECTION - pulls every guest with memberships, then filters by age.
+# ============================================================================
 
-# =============================== Fetch Users from Microsoft Entra ID ===============================
-Write-Host "🔎 Fetching Entra ID users..." -ForegroundColor Yellow
-$entraUsers = @{}
-$j = 0
-try {
-    Get-MgUser -All -Property DisplayName, UserPrincipalName, Department, JobTitle, Mail, AccountEnabled, CreatedDateTime, SignInActivity |
-    ForEach-Object {
-        $username = ($_.UserPrincipalName -split "@")[0].ToLower()
-        $entraUsers[$username] = $_
-        $j++
-        Write-Host "[EntraID] $j - $username : $($_.DisplayName)" -ForegroundColor DarkYellow
-    }
-    Write-Host "`n✅ Total Entra ID users: $j" -ForegroundColor Green
-} catch {
-    Write-Host "❌ Failed to load Entra ID users: $($_.Exception.Message)" -ForegroundColor Red
-}
+# Fetch guest users
+$Guests = Get-MgUser -All -Filter "UserType eq 'Guest'" `
+    -ExpandProperty MemberOf `
+    -Property DisplayName,UserPrincipalName,Mail,CompanyName,CreatedDateTime,CreationType,ExternalUserState
 
-# =============================== Fetch AD Users and Generate Merged Report ===============================
-Write-Host "`n🔎 Fetching AD users..." -ForegroundColor Yellow
-$i = 0
-Get-ADUser -Filter * -Properties * | ForEach-Object {
-    $adUser   = $_
-    $username = $adUser.SamAccountName.ToLower()
-    $entra    = $entraUsers[$username]
-    $i++
+foreach ($User in $Guests) {
+    $Counter++
+    Write-Progress -Activity "Exporting Guest Users" -Status "Processing $($User.DisplayName)" -PercentComplete (($Counter / $Guests.Count) * 100)
 
-    # Construct a combined user record from AD and Entra
-    $record = [PSCustomObject]@{
-        Username                        = $username
-        InAD                            = "Yes"
-        InEntraID                       = if ($entra) { "Yes" } else { "No" }
-        DisplayName                     = if ($adUser.DisplayName) { $adUser.DisplayName } elseif ($entra) { $entra.DisplayName } else { "" }
-        Department                      = if ($adUser.Department) { $adUser.Department } elseif ($entra) { $entra.Department } else { "" }
-        Title                           = if ($adUser.Title) { $adUser.Title } elseif ($entra) { $entra.JobTitle } else { "" }
-        Email                           = if ($adUser.Mail) { $adUser.Mail } elseif ($entra) { $entra.Mail } else { "" }
-        AD_Enabled                      = if ($adUser.Enabled) { 'Enabled' } else { 'Disabled' }
-        AD_Created                      = $adUser.WhenCreated.ToString("yyyy-MM-dd")
-        AD_LastLogon                    = if ($adUser.LastLogonDate) { $adUser.LastLogonDate.ToString("yyyy-MM-dd HH:mm") } else { "" }
-        AD_WhenChanged                  = if ($adUser.WhenChanged) { $adUser.WhenChanged.ToString("yyyy-MM-dd") } else { "" }
-        AD_PwdLastSet                   = if ($adUser.PwdLastSet) { ([datetime]::FromFileTime($adUser.PwdLastSet)).ToString("yyyy-MM-dd") } else { "" }
-        AD_Description                  = $adUser.Description
-        AD_DistinguishedName            = $adUser.DistinguishedName
-        Entra_Enabled                   = if ($entra.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-        Entra_Created                   = if ($entra.CreatedDateTime) { $entra.CreatedDateTime.ToString("yyyy-MM-dd") } else { "" }
-        Entra_LastInteractiveSignIn     = if ($entra.SignInActivity.LastSignInDateTime) { $entra.SignInActivity.LastSignInDateTime.ToString("yyyy-MM-dd HH:mm") } else { "" }
-        Entra_LastNonInteractiveSignIn  = if ($entra.SignInActivity.LastNonInteractiveSignInDateTime) { $entra.SignInActivity.LastNonInteractiveSignInDateTime.ToString("yyyy-MM-dd HH:mm") } else { "" }
+    # Basic info
+    $DisplayName = $User.DisplayName
+    $UserPrincipalName = $User.UserPrincipalName
+    $Email = $User.Mail
+
+    # Company: prefer real, else extract from domain
+    if ($User.CompanyName) {
+        $Company = $User.CompanyName
+    } elseif ($User.Mail -and $User.Mail -match "@(.+?)\.") {
+        $Domain = $Matches[1].ToLower()
+        switch ($Domain) {
+            "gmail"   { $Company = "Gmail" }
+            "hotmail" { $Company = "Hotmail" }
+            "outlook" { $Company = "Outlook" }
+            "yahoo"   { $Company = "Yahoo" }
+            "icloud"  { $Company = "iCloud" }
+            default   { $Company = ($Domain.Substring(0,1).ToUpper() + $Domain.Substring(1)) }
+        }
+    } else {
+        $Company = "-"
     }
 
-    # Append to CSV and collect the same row for the HTML dashboard.
-    $record | Select-Object $columns | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Append
-    $htmlRows += $record
-    Write-Host "[✔] $i - $username : $($record.DisplayName)" -ForegroundColor Green
+    # Account age and creation
+    if ($User.CreatedDateTime) {
+        $CreationTime = $User.CreatedDateTime
+        $AccountAge = (New-TimeSpan -Start $User.CreatedDateTime).Days
+    } else {
+        $CreationTime = "Unknown"
+        $AccountAge = "Unknown"
+    }
+
+    # Skip filtered guests
+    if ($AccountAge -ne "Unknown") {
+        if ($StaleGuests -and ($AccountAge -lt $StaleGuests)) { continue }
+        if ($RecentlyCreatedGuests -and ($AccountAge -gt $RecentlyCreatedGuests)) { continue }
+    }
+
+    # Creation type and invitation status
+    $CreationType = if ($User.CreationType) { $User.CreationType } else { "-" }
+    $InvitationAccepted = if ($User.ExternalUserState) { $User.ExternalUserState } else { "-" }
+
+    # Group memberships
+    $GroupMemberships = "-"
+    if ($User.MemberOf) {
+        $GroupNames = @()
+        foreach ($Group in $User.MemberOf) {
+            if ($Group.AdditionalProperties["displayName"]) {
+                $GroupNames += $Group.AdditionalProperties["displayName"]
+            }
+        }
+        if ($GroupNames.Count -gt 0) {
+            $GroupMemberships = $GroupNames -join ", "
+        }
+    }
+
+    # Add result row
+    $Results += [PSCustomObject]@{
+        DisplayName         = $DisplayName
+        UserPrincipalName   = $UserPrincipalName
+        Company             = $Company
+        EmailAddress        = $Email
+        CreationTime        = $CreationTime
+        "AccountAge(days)"  = $AccountAge
+        CreationType        = $CreationType
+        InvitationAccepted  = $InvitationAccepted
+        GroupMembership     = $GroupMemberships
+    }
 }
 
-# =============================== Carbon HTML Dashboard (same rows, no re-query) ===============================
-$htmlPath = [System.IO.Path]::ChangeExtension($csvPath, '.html')
-$tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Username)") + '</code></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.DisplayName)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.InAD)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.InEntraID)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.AD_LastLogon)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Entra_LastInteractiveSignIn)") + '</td></tr>'
+# Dual export: raw CSV plus Carbon Dark HTML dashboard (shared timestamp).
+if ($Results.Count -gt 0) {
+    $stamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+    $csvPath = Join-Path $reportsDirectory "GuestUserReport_$stamp.csv"
+    $htmlPath = [System.IO.Path]::ChangeExtension($csvPath, '.html')
+    $Results | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+
+    # Defensive re-collection: $Results must survive for the HTML table (Rule 26).
+    $htmlRows = @($Results)
+    if (-not $htmlRows) { $htmlRows = @() }
+    $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
+        '<tr><td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.DisplayName)") + '</td>' +
+        '<td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UserPrincipalName)") + '</code></td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Company)") + '</td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.CreationTime)") + '</td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.CreationType)") + '</td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.GroupMembership)") + '</td></tr>'
+    }
+    $tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) guests; full data is in the CSV.</p>" } else { '' }
+    $tableHtml = '<div class="section-title">Guest Detail</div>' +
+        '<div class="card"><h2>All Guests (' + $htmlRows.Count + ')</h2>' +
+        '<table><thead><tr><th>Display Name</th><th>UPN</th><th>Company</th><th>Created</th><th>Type</th><th>Groups</th></tr></thead><tbody>' +
+        ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
+
+    $companyCount = @($htmlRows | Select-Object -ExpandProperty Company -Unique).Count
+    $groupedCount = @($htmlRows | Where-Object { $_.GroupMembership }).Count
+    $kpis = @(
+        @{ value = "$($htmlRows.Count)"; label = 'Guest users'; color = '' },
+        @{ value = "$companyCount"; label = 'Companies'; color = '#0f62fe' },
+        @{ value = "$groupedCount"; label = 'Guests in groups'; color = '#f1c21b' }
+    )
+    Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Guest User Report' -Subtitle ("Guests: $($htmlRows.Count) | Companies: $companyCount") `
+        -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'Guest User Report'
+    Write-Log -Message "✅ Export completed successfully!" -Level 'SUCCESS'
+    Write-Log -Message "CSV:  $csvPath ($($Results.Count) rows)" -Level 'SUCCESS'
+    Write-Log -Message "HTML: $htmlPath" -Level 'SUCCESS'
+
+    $Prompt = New-Object -ComObject wscript.shell
+    if ($Prompt.popup("Open the CSV report?", 0, "Export Complete", 4) -eq 6) {
+        Invoke-Item $csvPath
+    }
+} else {
+    Write-Log -Message "❌ No guest users found matching filters." -Level 'WARNING'
 }
-$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Hybrid User Detail</div>' +
-    '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>Username</th><th>Display Name</th><th>In AD</th><th>In Entra ID</th><th>AD Last Logon</th><th>Entra Last Sign-In</th></tr></thead><tbody>' +
-    ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
 
-$bothCount = @($htmlRows | Where-Object { $_.InEntraID -eq 'Yes' }).Count
-$adOnlyCount = @($htmlRows | Where-Object { $_.InEntraID -ne 'Yes' }).Count
-$kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users merged'; color = '' },
-    @{ value = "$bothCount"; label = 'In AD + Entra ID'; color = '#24a148' },
-    @{ value = "$adOnlyCount"; label = 'AD only'; color = '#f1c21b' }
-)
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Hybrid User Audit' -Subtitle ("Merged: $($htmlRows.Count) | Both directories: $bothCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'Hybrid User Audit'
-
-# =============================== Wrap-Up ===============================
-Stop-Transcript
-Write-Host "`n✅ Report saved to: $csvPath" -ForegroundColor Green
-Start-Process "explorer.exe" -ArgumentList (Split-Path $csvPath)
+# Disconnect
+Disconnect-MgGraph | Out-Null
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).

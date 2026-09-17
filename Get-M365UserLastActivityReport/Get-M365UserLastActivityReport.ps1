@@ -1,26 +1,27 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Get-M365UserLastActivityReport - Office 365 users real last logon time report
 
 .SYNOPSIS
-    This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
+    This script generates a report of Office 365 users' real last logon times and exports it to a CSV file.
 
 .DESCRIPTION
-    - Retrieves user sign-in data from Microsoft Graph API.
-    - Identifies inactive users based on interactive and non-interactive sign-ins.
-    - Filters users based on multiple criteria (enabled users, disabled users, external users, etc.).
-    - Exports results into a properly formatted CSV file with UTF-8 encoding.
-    - Automatically installs the required Microsoft Graph PowerShell module if missing.
-    - Scheduler-friendly for automated execution.
+    The script performs the following actions:
+    1. Checks if the required Exchange Online and MSOnline modules are installed, and installs them if not.
+    2. Loads the necessary modules.
+    3. Authenticates to Azure AD and Exchange Online.
+    4. Retrieves mailbox statistics for each user.
+    5. Filters the users based on various parameters (inactive days, mailbox type, license status, etc.).
+    6. Exports the final report to a CSV file under Reports\ beside the script.
 
 .TAGS
-    Identity,M365,Reporting
+    Identity,M365,Exchange
 
 .PLATFORM
     Windows 10/11/Server 2019+
 
 .PERMISSIONS
-    User.Read.All, AuditLog.Read.All
+    M365 admin (Exchange Online)
 
 .AUTHOR
     AI Generated
@@ -35,33 +36,34 @@
     2026-09-16
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
-    Runs an inactivity report for users inactive more than 90 days.
+    .\Get-M365UserLastActivityReport.ps1 -InactiveDays 90
+    Runs the last-activity report for mailboxes inactive more than 90 days.
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
-    Lists enabled users who never logged in (provisioning cleanup).
+    .\Get-M365UserLastActivityReport.ps1 -InactiveDays 90 -UserMailboxOnly -LicensedUserOnly
+    Narrows the report to licensed user mailboxes inactive more than 90 days.
 
 .NOTES
-    Part of Microsoft365-Scripts toolkit - Identity,M365,Reporting
+    Part of Microsoft365-Scripts toolkit - Identity,M365,Exchange
     Exit codes: 0 = success, 1 = failure, 2 = script error
     Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
 #>
 
 #Requires -Version 5.1
 
+# Accept input parameters
 Param
 (
+    [Parameter(Mandatory = $false)]
+    [string]$MBNamesFile,
     [int]$InactiveDays,
-    [int]$InactiveDays_NonInteractive,
-    [switch]$ReturnNeverLoggedInUser,
-    [switch]$EnabledUsersOnly,
-    [switch]$DisabledUsersOnly,
-    [switch]$ExternalUsersOnly,
-    [switch]$CreateSession,
-    [string]$TenantId,
-    [string]$ClientId,
-    [string]$CertificateThumbprint
+    [switch]$UserMailboxOnly,
+    [switch]$LicensedUserOnly,
+    [switch]$ReturnNeverLoggedInMBOnly,
+    [string]$UserName,
+    [string]$Password,
+    [switch]$FriendlyTime,
+    [switch]$NoMFA
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,7 +72,7 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'GetM365InactiveUserReport'
+$SolutionName = 'Get-M365UserLastActivityReport'
 $ScriptMode   = 'run'
 
 # ============================================================================
@@ -192,123 +194,270 @@ $null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type
 Write-Banner
 
 # ============================================================================
-# GRAPH CONNECTION - installs the Beta module on confirmation, then signs in.
+# MAILBOX HELPERS - date formatting and per-mailbox last-logon resolution.
 # ============================================================================
 
-# Ensures the Graph Beta module exists (prompted install) and connects; honors -CreateSession.
-Function Connect_MgGraph
-{
-    # Check if the Microsoft Graph Beta module is installed
-    $MsGraphBetaModule = Get-Module Microsoft.Graph.Beta -ListAvailable
-    if ($MsGraphBetaModule -eq $null)
-    { 
-        Write-Log -Message "⚠️ Microsoft Graph Beta module is missing. It must be installed to run the script successfully." -Level 'WARNING'
-        $confirm = Read-Host "Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No"  
-        if ($confirm -match "[yY]") 
-        { 
-            Write-Log -Message "📦 Installing Microsoft Graph Beta module..." -Level 'INFO'
-            Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
-            Write-Log -Message "✅ Microsoft Graph Beta module installed successfully." -Level 'SUCCESS'
-        } 
-        else
-        { 
-            Write-Log -Message "❌ Exiting. Microsoft Graph Beta module is required for this script." -Level 'ERROR'
-            Exit 
-        } 
-    }
-    
-    # Disconnect any existing Microsoft Graph sessions if requested
-    if ($CreateSession.IsPresent)
-    {
-        Disconnect-MgGraph
-    }
-    
-    # Connecting to Microsoft Graph
-    Write-Log -Message "🔗 Connecting to Microsoft Graph..." -Level 'INFO'
-    if (($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint 
-    }
-    else
-    {
-        Connect-MgGraph -Scopes "User.Read.All", "AuditLog.read.All"  
-    }
+# Formats a datetime as "MMM dd, yyyy hh:mm tt" for friendly output.
+Function ConvertTo-HumanDate {
+    param (
+        [datetime]$InputDate
+    )
+    return $InputDate.ToString("MMM dd, yyyy hh:mm tt")
 }
 
-Connect_MgGraph
-Write-Log -Message "📝 If you encounter module-related conflicts, run the script in a fresh PowerShell window." -Level 'WARNING'
+# Resolves one mailbox's last logon from EXO statistics and computes inactive days.
+Function Get_LastLogonTime {
+    param (
+        [string]$upn,
+        [string]$DisplayName,
+        [string]$CreationTime,
+        [string]$MBType
+    )
 
-# Define the CSV export path in the script's directory
-$ExportCSV = Join-Path -Path $PSScriptRoot -ChildPath "InactiveM365UserReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd hh-mm-ss tt')).csv"
-$ExportResults = @()  
+    $MailboxStatistics = Get-MailboxStatistics -Identity $upn
+    $LastActionTime = $MailboxStatistics.LastUserActionTime
+    $LastActionTimeUpdatedOn = $MailboxStatistics.LastUserActionUpdateTime
+    $RolesAssigned = ""
+    Write-Progress -Activity "`nProcessed mailbox count: $MBUserCount " -Status "Currently Processing: $DisplayName"
 
-# Retrieve inactive users
-Write-Log -Message "🔄 Retrieving inactive users from Microsoft 365..." -Level 'INFO'
-$RequiredProperties = @('UserPrincipalName', 'EmployeeId', 'DisplayName', 'CreatedDateTime', 'AccountEnabled', 'Department', 'JobTitle', 'RefreshTokensValidFromDateTime', 'SigninActivity')
-$Count = 0
-$PrintedUser = 0
+    # Retrieve last logon time and calculate inactive days 
+    if ($LastActionTime -eq $null) {
+        $LastActionTime = "Never Logged In"
+        $InactiveDaysOfUser = "-"
+    } else {
+        $InactiveDaysOfUser = (New-TimeSpan -Start $LastActionTime).Days
+        # Convert Last Action Time to Friendly Time
+        if ($FriendlyTime.IsPresent) {
+            $FriendlyLastActionTime = ConvertTo-HumanDate $LastActionTime
+            $LastActionTime = "$LastActionTime ($FriendlyLastActionTime)"
+        }
+    }
+    # Convert Last Action Time Updated On to Friendly Time
+    if ($LastActionTimeUpdatedOn -ne $null) {
+        if ($FriendlyTime.IsPresent) {
+            $FriendlyLastActionTimeUpdatedOn = ConvertTo-HumanDate $LastActionTimeUpdatedOn
+            $LastActionTimeUpdatedOn = "$LastActionTimeUpdatedOn ($FriendlyLastActionTimeUpdatedOn)"
+        }
+    } else {
+        $LastActionTimeUpdatedOn = "-"
+    }
 
-Get-MgBetaUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object {
-    $Count++
-    $UPN = $_.UserPrincipalName
-    Write-Progress -Activity "🔎 Processing user: $Count - $UPN"
+    # Get licenses assigned to mailboxes 
+    $User = Get-MsolUser -UserPrincipalName $upn
+    $Licenses = $User.Licenses.AccountSkuId
+    $AssignedLicense = ""
+    $Count = 0
 
-    # Extract user details
-    $LastInteractiveSignIn = $_.SignInActivity.LastSignInDateTime
-    $LastNon_InteractiveSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    
-    # Handle inactive days calculation
-    if ($LastInteractiveSignIn -eq $null) { $LastInteractiveSignIn = "Never Logged In"; $InactiveDays_InteractiveSignIn = "-" }
-    else { $InactiveDays_InteractiveSignIn = (New-TimeSpan -Start $LastInteractiveSignIn).Days }
-    
-    if ($LastNon_InteractiveSignIn -eq $null) { $LastNon_InteractiveSignIn = "Never Logged In"; $InactiveDays_NonInteractiveSignIn = "-" }
-    else { $InactiveDays_NonInteractiveSignIn = (New-TimeSpan -Start $LastNon_InteractiveSignIn).Days }
-    
-    $AccountStatus = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
+    if ($Licenses.count -eq 0) {
+        $AssignedLicense = "No License Assigned"
+    } else {
+        foreach ($License in $Licenses) {
+            $Count++
+            $LicenseItem = $License -Split ":" | Select-Object -Last 1
+            $AssignedLicense += $LicenseItem
+            if ($Count -lt $Licenses.count) {
+                $AssignedLicense += ","
+            }
+        }
+    }
 
-    # Export to CSV and collect the same row for the HTML dashboard.
-    [PSCustomObject]@{
-        
-        'UPN' = $UPN; 'Creation Date' = $_.CreatedDateTime; 'Last Interactive SignIn Date' = $LastInteractiveSignIn;
-        'Last Non Interactive SignIn Date' = $LastNon_InteractiveSignIn; 'Inactive Days(Interactive SignIn)' = $InactiveDays_InteractiveSignIn;
-        'Inactive Days(Non-Interactive Signin)' = $InactiveDays_NonInteractiveSignIn; 'Account Status' = $AccountStatus;
-        'Department' = $_.Department; 'Employee ID' = $_.EmployeeId; 'Employee Name' = $_.DisplayName; 'Job Title' = $_.JobTitle
-    } | ForEach-Object { $ExportResults += $_; $_ } | Export-Csv -Path $ExportCSV -NoTypeInformation -Encoding UTF8 -Append
+    # Inactive days based filter 
+    if ($InactiveDaysOfUser -ne "-") {
+        if (($InactiveDays -ne "") -and ([int]$InactiveDays -gt $InactiveDaysOfUser)) {
+            return
+        }
+    }
+
+    # Filter result based on user mailbox 
+    if ($UserMailboxOnly.IsPresent -and $MBType -ne "UserMailbox") {
+        return
+    }
+
+    # Never Logged In user
+    if ($ReturnNeverLoggedInMBOnly.IsPresent -and $LastActionTime -ne "Never Logged In") {
+        return
+    }
+
+    # Filter result based on license status
+    if ($LicensedUserOnly.IsPresent -and $AssignedLicense -eq "No License Assigned") {
+        return
+    }
+
+    # Get roles assigned to user 
+    $Roles = (Get-MsolUserRole -UserPrincipalName $upn).Name
+    if ($Roles.count -eq 0) {
+        $RolesAssigned = "No roles"
+    } else {
+        foreach ($Role in $Roles) {
+            $RolesAssigned += $Role
+            if ($Roles.indexof($Role) -lt ($Roles.count - 1)) {
+                $RolesAssigned += ","
+            }
+        }
+    }
+
+    # Export result to CSV file 
+    $Result = @{
+        'UserPrincipalName' = $upn
+        'DisplayName' = $DisplayName
+        'LastUserActionTime' = $LastActionTime
+        'LastActionTimeUpdatedOn' = $LastActionTimeUpdatedOn
+        'CreationTime' = $CreationTime
+        'InactiveDays' = $InactiveDaysOfUser
+        'MailboxType' = $MBType
+        'AssignedLicenses' = $AssignedLicense
+        'Roles' = $RolesAssigned
+    }
+    $rowObject = New-Object PSObject -Property $Result
+    $script:ActivityRows += $rowObject
+    $Output = $rowObject
+    $Output | Select-Object UserPrincipalName, DisplayName, LastUserActionTime, LastActionTimeUpdatedOn, InactiveDays, CreationTime, MailboxType, AssignedLicenses, Roles | Export-Csv -Path $ExportCSV -NoTypeInformation -Append
 }
 
-# Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
-$htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
-$htmlRows = @($ExportResults)
-$tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    $statusBadge = if ("$($rowRef.'Account Status')" -eq 'Disabled') { 'medium' } else { 'low' }
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UPN)") + '</code></td>' +
-    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Account Status')") + '</span></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Last Interactive SignIn Date')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Inactive Days(Interactive SignIn)')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Department)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Job Title')") + '</td></tr>'
+# ============================================================================
+# MAIN - module checks, EXO/Azure AD sign-in, collection, filtering, CSV export.
+# ============================================================================
+
+# Orchestrates the full report run from module check to CSV export.
+Function main {
+    # Check for EXO v2 module installation
+    $Module = Get-Module ExchangeOnlineManagement -ListAvailable
+    if ($Module.count -eq 0) {
+        Write-Log -Message "Exchange Online PowerShell V2 module is not available" -Level 'WARNING'
+        $Confirm = Read-Host "Are you sure you want to install module? [Y] Yes [N] No"
+        if ($Confirm -match "[yY]") {
+            Write-Log -Message "Installing Exchange Online PowerShell module" -Level 'INFO'
+            Install-Module ExchangeOnlineManagement -Repository PSGallery -AllowClobber -Force
+            Import-Module ExchangeOnlineManagement
+        } else {
+            Write-Log -Message "EXO V2 module is required to connect Exchange Online. Please install module using Install-Module ExchangeOnlineManagement cmdlet." -Level 'ERROR'
+            Exit
+        }
+    }
+    # Check for Azure AD module
+    $Module = Get-Module MsOnline -ListAvailable
+    if ($Module.count -eq 0) {
+        Write-Log -Message "MSOnline module is not available" -Level 'WARNING'
+        $Confirm = Read-Host "Are you sure you want to install the module? [Y] Yes [N] No"
+        if ($Confirm -match "[yY]") {
+            Write-Log -Message "Installing MSOnline PowerShell module" -Level 'INFO'
+            Install-Module MSOnline -Repository PSGallery -AllowClobber -Force
+            Import-Module MSOnline
+        } else {
+            Write-Log -Message "MSOnline module is required to generate the report. Please install module using Install-Module MSOnline cmdlet." -Level 'ERROR'
+            Exit
+        }
+    }
+
+    # Authentication using non-MFA
+    if ($NoMFA.IsPresent) {
+        # Storing credential in script for scheduling purpose/ Passing credential as parameter
+        if ($UserName -ne "" -and $Password -ne "") {
+            $SecuredPassword = ConvertTo-SecureString -AsPlainText $Password -Force
+            $Credential = New-Object System.Management.Automation.PSCredential $UserName, $SecuredPassword
+        } else {
+            $Credential = Get-Credential -Credential $null
+        }
+        Write-Log -Message "Connecting Azure AD..." -Level 'INFO'
+        Connect-MsolService -Credential $Credential | Out-Null
+        Write-Log -Message "Connecting Exchange Online PowerShell..." -Level 'INFO'
+        Connect-ExchangeOnline -Credential $Credential
+    } else {
+        # Connect to Exchange Online and AzureAD module using MFA
+        Write-Log -Message "Connecting Exchange Online PowerShell..." -Level 'INFO'
+        Connect-ExchangeOnline
+        Write-Log -Message "Connecting Azure AD..." -Level 'INFO'
+        Connect-MsolService | Out-Null
+    }
+
+    # Friendly DateTime conversion
+    if ($FriendlyTime.IsPresent) {
+        If ((Get-Module -Name PowerShellHumanizer -ListAvailable).Count -eq 0) {
+            Write-Log -Message "Installing PowerShellHumanizer for Friendly DateTime conversion" -Level 'INFO'
+            Install-Module -Name PowerShellHumanizer
+        }
+    }
+
+    $Result = ""
+    $Output = @()
+    $script:ActivityRows = @()
+    $MBUserCount = 0
+
+    # Set output file (anchored beside the script per Law 12)
+    $scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
+    $reportsDirectory = Join-Path $scriptDirectory 'Reports'
+    if (-not (Test-Path -LiteralPath $reportsDirectory)) { $null = [System.IO.Directory]::CreateDirectory($reportsDirectory) }
+    $ExportCSV = Join-Path $reportsDirectory ("LastAccessTimeReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv")
+
+    # Check for input file
+    if ([string]$MBNamesFile -ne "") {
+        # We have an input file, read it into memory
+        $Mailboxes = @()
+        $Mailboxes = Import-Csv -Header "MBIdentity" $MBNamesFile
+        foreach ($item in $Mailboxes) {
+            $MBDetails = Get-Mailbox -Identity $item.MBIdentity
+            $upn = $MBDetails.UserPrincipalName
+            $CreationTime = $MBDetails.WhenCreated
+            $DisplayName = $MBDetails.DisplayName
+            $MBType = $MBDetails.RecipientTypeDetails
+            $MBUserCount++
+            Get_LastLogonTime -upn $upn -DisplayName $DisplayName -CreationTime $CreationTime -MBType $MBType
+        }
+    } else {
+        # Get all mailboxes from Office 365
+        Write-Progress -Activity "Getting Mailbox details from Office 365..." -Status "Please wait."
+        Get-Mailbox -ResultSize Unlimited | Where-Object { $_.DisplayName -notlike "Discovery Search Mailbox" } | ForEach-Object {
+            $upn = $_.UserPrincipalName
+            $CreationTime = $_.WhenCreated
+            $DisplayName = $_.DisplayName
+            $MBType = $_.RecipientTypeDetails
+            $MBUserCount++
+            Get_LastLogonTime -upn $upn -DisplayName $DisplayName -CreationTime $CreationTime -MBType $MBType
+        }
+    }
+
+    # Open output file after execution
+    Write-Log -Message "Script executed successfully" -Level 'SUCCESS'
+    if (Test-Path -Path $ExportCSV) {
+        # Carbon Dark HTML dashboard from the collected rows (shared run, no re-query).
+        $htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
+        $htmlRows = @($script:ActivityRows)
+        $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
+            '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UserPrincipalName)") + '</code></td>' +
+            '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.DisplayName)") + '</td>' +
+            '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.LastUserActionTime)") + '</td>' +
+            '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.InactiveDays)") + '</td>' +
+            '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.MailboxType)") + '</td>' +
+            '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.CreationTime)") + '</td></tr>'
+        }
+        $tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) mailboxes; full data is in the CSV.</p>" } else { '' }
+        $tableHtml = '<div class="section-title">Last Activity Detail</div>' +
+            '<div class="card"><h2>All Mailboxes (' + $htmlRows.Count + ')</h2>' +
+            '<table><thead><tr><th>User</th><th>Display Name</th><th>Last Action</th><th>Inactive Days</th><th>Type</th><th>Created</th></tr></thead><tbody>' +
+            ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
+
+        $neverCount = @($htmlRows | Where-Object { -not $_.LastUserActionTime }).Count
+        $kpis = @(
+            @{ value = "$($htmlRows.Count)"; label = 'Mailboxes in report'; color = '' },
+            @{ value = "$neverCount"; label = 'Never active'; color = '#f1c21b' }
+        )
+        Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 User Last Activity' -Subtitle ("Mailboxes: $($htmlRows.Count) | Never active: $neverCount") `
+            -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 User Last Activity'
+        Write-Log -Message "CSV:  $ExportCSV" -Level 'SUCCESS'
+        Write-Log -Message "HTML: $htmlPath" -Level 'SUCCESS'
+        $Prompt = New-Object -ComObject wscript.shell
+        $UserInput = $Prompt.popup("Do you want to open output file?", 0, "Open Output File", 4)
+        If ($UserInput -eq 6) {
+            Invoke-Item "$ExportCSV"
+        }
+    } else {
+        Write-Log -Message "No mailbox found" -Level 'WARNING'
+    }
+    # Clean up session
+    Get-PSSession | Remove-PSSession
 }
-$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Inactive User Detail</div>' +
-    '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>UPN</th><th>Status</th><th>Last Interactive Sign-In</th><th>Inactive Days</th><th>Department</th><th>Job Title</th></tr></thead><tbody>' +
-    ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
 
-$disabledCount = @($htmlRows | Where-Object { $_."Account Status" -eq 'Disabled' }).Count
-$neverCount = @($htmlRows | Where-Object { $_."Last Interactive SignIn Date" -eq 'Never Logged In' }).Count
-$kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
-    @{ value = "$disabledCount"; label = 'Disabled users'; color = '#f1c21b' },
-    @{ value = "$neverCount"; label = 'Never logged in'; color = '#da1e28' }
-)
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 Inactive User Report' -Subtitle ("Users: $($htmlRows.Count) | Disabled: $disabledCount | Never logged in: $neverCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 Inactive User Report'
-
-# Final message
-Write-Log -Message "✅ Script executed successfully. Exported report has $($htmlRows.Count) user(s)." -Level 'SUCCESS'
-Write-Log -Message "📄 CSV:  $ExportCSV" -Level 'WARNING'
-Write-Log -Message "📄 HTML: $htmlPath" -Level 'WARNING'
-Invoke-Item "$ExportCSV"
+main
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).

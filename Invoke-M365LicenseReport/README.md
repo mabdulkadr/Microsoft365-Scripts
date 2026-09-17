@@ -1,10 +1,10 @@
 <div align="center">
 
-# 💻 Add-DevicesToAzureADGroup
+# 💻 Invoke-M365LicenseReport
 
-**Bulk-add devices to an Entra ID group by device name.**
+**License allocation and usage report for Microsoft 365 (CSV + HTML).**
 
-Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
+Collects subscribed SKUs and per-user assignments from Graph, computes used vs unused counts per plan, and renders console + HTML output.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,26 +20,25 @@ Resolves names to Device Object IDs first — the step Azure AD's bulk import ca
 
 # 📖 Overview
 
-**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
+**Invoke-M365LicenseReport** is a PowerShell script that generates a Microsoft 365 license allocation and usage report. It connects to Microsoft Graph, pulls subscribed SKUs and user license assignments, and highlights waste (e.g. licenses on disabled accounts).
 
 ---
 
 # ✨ Features
 
-* Bulk add from a CSV of device names
-* Automatic Device ID lookup per name
-* Handles duplicate device names (adds all matches)
-* Skips not-found / already-member devices with per-device output
+* Subscribed-SKU inventory with used/unused counts per plan
+* Per-user license assignment detail
+* Waste spotlight: disabled accounts still holding licenses, guests with licenses
+* Console summary plus report export beside the script: SKU/inactive/privileged CSVs + Carbon Dark HTML dashboard
 
 ---
 
 # 📂 Project Structure
 
 ```text
-Add-DevicesToAzureADGroup
+Invoke-M365LicenseReport
 │
-├── Add-DevicesToAzureADGroup.ps1
-├── SampleDevicesFile.csv
+├── Invoke-M365LicenseReport.ps1
 └── README.md
 ```
 
@@ -49,18 +48,8 @@ Add-DevicesToAzureADGroup
 
 ### Basic Usage
 ```powershell
-.\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
+.\Invoke-M365LicenseReport.ps1 -outpath "C:\Reports"
 ```
-
-### CSV Format
-```csv
-DeviceName
-Device-01
-Device-02
-Device-03
-```
-
-Device names must match Entra ID exactly.
 
 ---
 
@@ -68,8 +57,7 @@ Device names must match Entra ID exactly.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `GroupName` | String | Yes | — | Target Entra ID group name. |
-| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
+| `outpath` | String | Yes | — | Output folder for the generated report. |
 
 ### Exit Codes
 | Code | Status |
@@ -86,18 +74,17 @@ Device names must match Entra ID exactly.
 
 ### PowerShell
 * PowerShell **5.1 or later**
-* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
+* Microsoft Graph modules (installed on confirmation if missing)
 
 ### Permissions
-* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
+* `User.Read.All`, `AuditLog.Read.All`, `Organization.Read.All`, `RoleManagement.Read.Directory` (Microsoft Graph).
 
 ---
 
 # 🛡 Operational Notes
-* Connects to Azure AD automatically before operating.
-* Members already in the group are skipped, not errored.
-* Sample input: `SampleDevicesFile.csv` in this folder.
-* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
+* `-outpath` is mandatory — the folder is created if missing.
+* Reclaim licenses surfaced in the waste section before buying more seats.
+* For a per-user license matrix instead, see [`Get-EntraLicenseReport`](../Get-EntraLicenseReport/README.md).
 
 ---
 

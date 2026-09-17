@@ -1,10 +1,10 @@
 <div align="center">
 
-# 💻 Add-DevicesToAzureADGroup
+# 💻 AzureAD-DeviceGroupManagement-AppAuth
 
-**Bulk-add devices to an Entra ID group by device name.**
+**Group Intune devices into static Entra ID groups using app-only authentication.**
 
-Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
+Fully unattended variant of the device group manager — authenticates with Tenant ID / App ID / App Secret, no interactive sign-in.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,26 +20,25 @@ Resolves names to Device Object IDs first — the step Azure AD's bulk import ca
 
 # 📖 Overview
 
-**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
+**AzureAD-DeviceGroupManagement-AppAuth** is a PowerShell script that manages static Entra ID groups for Intune devices with app-only authentication. It finds existing static groups by prefix, creates new ones as needed, and distributes devices so no group exceeds the member limit. Companion to [`AzureAD-DeviceGroupManagement`](../AzureAD-DeviceGroupManagement/README.md), which uses the interactive/manual connection flow.
 
 ---
 
 # ✨ Features
 
-* Bulk add from a CSV of device names
-* Automatic Device ID lookup per name
-* Handles duplicate device names (adds all matches)
-* Skips not-found / already-member devices with per-device output
+* App-only Graph connection (Tenant ID / App ID / App Secret) — scheduler-friendly
+* Prefix-based group discovery with automatic overflow group creation
+* Configurable batch size and zero-padded group numbering
+* Optional file logging with `[timestamp] [LEVEL]` lines
 
 ---
 
 # 📂 Project Structure
 
 ```text
-Add-DevicesToAzureADGroup
+AzureAD-DeviceGroupManagement-AppAuth
 │
-├── Add-DevicesToAzureADGroup.ps1
-├── SampleDevicesFile.csv
+├── AzureAD-DeviceGroupManagement-AppAuth.ps1
 └── README.md
 ```
 
@@ -49,18 +48,13 @@ Add-DevicesToAzureADGroup
 
 ### Basic Usage
 ```powershell
-.\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
+.\AzureAD-DeviceGroupManagement-AppAuth.ps1
 ```
 
-### CSV Format
-```csv
-DeviceName
-Device-01
-Device-02
-Device-03
+### With Parameters
+```powershell
+.\AzureAD-DeviceGroupManagement-AppAuth.ps1 -BatchSize 300 -GroupNamePrefix "CorporateDevices-" -NamePadding 3 -EnableLogging -LogFilePath "D:\Logs\DeviceGroups.log"
 ```
-
-Device names must match Entra ID exactly.
 
 ---
 
@@ -68,8 +62,11 @@ Device names must match Entra ID exactly.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `GroupName` | String | Yes | — | Target Entra ID group name. |
-| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
+| `BatchSize` | Int | No | `500` | Max devices per group before a new overflow group is created. |
+| `GroupNamePrefix` | String | No | `Devices-group` | Prefix for discovered/created static groups. |
+| `NamePadding` | Int | No | `2` | Zero-padded digits in group numbering (`01`, `02`, …). |
+| `EnableLogging` | Switch | No | off | Writes operations to the log file. |
+| `LogFilePath` | String | No | `GroupCreationLog.txt` (beside the script) | Log file path (used with `-EnableLogging`). |
 
 ### Exit Codes
 | Code | Status |
@@ -86,18 +83,17 @@ Device names must match Entra ID exactly.
 
 ### PowerShell
 * PowerShell **5.1 or later**
-* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
+* `AzureAD` module; Microsoft Graph modules (auto-installed if missing)
 
 ### Permissions
-* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
+* Entra ID admin able to create groups and manage memberships; Intune device read.
 
 ---
 
 # 🛡 Operational Notes
-* Connects to Azure AD automatically before operating.
-* Members already in the group are skipped, not errored.
-* Sample input: `SampleDevicesFile.csv` in this folder.
-* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
+* Manages **static** memberships only — no dynamic rules.
+* Store the App Secret securely (Key Vault / Secret Store); never commit real secrets.
+* For the interactive variant see [`AzureAD-DeviceGroupManagement`](../AzureAD-DeviceGroupManagement/README.md).
 
 ---
 

@@ -1,67 +1,65 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Entra Sign-In Report
 
 .SYNOPSIS
-    This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
+    Analyzes Entra ID sign-in logs for security issues.
 
 .DESCRIPTION
-    - Retrieves user sign-in data from Microsoft Graph API.
-    - Identifies inactive users based on interactive and non-interactive sign-ins.
-    - Filters users based on multiple criteria (enabled users, disabled users, external users, etc.).
-    - Exports results into a properly formatted CSV file with UTF-8 encoding.
-    - Automatically installs the required Microsoft Graph PowerShell module if missing.
-    - Scheduler-friendly for automated execution.
+    Pulls recent sign-in logs and reports failed sign-ins, MFA failures, legacy authentication
+    usage, conditional access failures, sign-ins from unusual locations, top failing users,
+    and top failing apps. Essential for security audits and incident investigation. Requires
+    Entra ID P1/P2 for sign-in log access; data retained 30 days maximum.
 
 .TAGS
-    Identity,M365,Reporting
+    Entra,SignIn,Security,Reporting,Audit
 
 .PLATFORM
-    Windows 10/11/Server 2019+
+    Windows
+
+.MINROLE
+    Security Reader
 
 .PERMISSIONS
-    User.Read.All, AuditLog.Read.All
+    AuditLog.Read.All,Directory.Read.All
 
 .AUTHOR
     AI Generated
 
 .VERSION
-    1.0.0
+    1.1.0
 
 .CHANGELOG
-    1.0.0 (2026-09-16) - Compliance hardening: canonical rich header, ErrorActionPreference Stop, alias and catch hygiene.
+    1.1.0 (2026-08-26)
+    - Migrated to Enterprise Standards canonical structure (header, logging, banner, ErrorActionPreference, full cmdlet names, typed catches)
+    1.0.0
+    - Initial release
 
 .LASTUPDATE
-    2026-09-16
+    2026-08-26
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
-    Runs an inactivity report for users inactive more than 90 days.
+    .\Get-EntraSignInReport.ps1
+    Last 24 hours of failed sign-ins
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
-    Lists enabled users who never logged in (provisioning cleanup).
+    .\Get-EntraSignInReport.ps1 -Hours 168 -IncludeSuccessful
+    Last 7 days including successes
 
 .NOTES
-    Part of Microsoft365-Scripts toolkit - Identity,M365,Reporting
-    Exit codes: 0 = success, 1 = failure, 2 = script error
-    Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
+    - Requires Microsoft.Graph.Authentication module: Install-Module Microsoft.Graph.Authentication
+    - Requires Entra ID P1/P2 license for sign-in log access
+    - Sign-in data retained for 30 days maximum
+    - Logs: %ProgramData%\get-entra-sign-in-report\Logs\<timestamp>.log
 #>
 
 #Requires -Version 5.1
 
-Param
-(
-    [int]$InactiveDays,
-    [int]$InactiveDays_NonInteractive,
-    [switch]$ReturnNeverLoggedInUser,
-    [switch]$EnabledUsersOnly,
-    [switch]$DisabledUsersOnly,
-    [switch]$ExternalUsersOnly,
-    [switch]$CreateSession,
-    [string]$TenantId,
-    [string]$ClientId,
-    [string]$CertificateThumbprint
+[CmdletBinding()]
+param(
+    [Parameter()][int]$Hours = 24,
+    [Parameter()][switch]$IncludeSuccessful,
+    [Parameter()][string]$ExportPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,14 +68,18 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'GetM365InactiveUserReport'
+$SolutionName = 'Get-EntraSignInReport'
 $ScriptMode   = 'run'
 
 # ============================================================================
-# LOGGING BLOCK (embedded canonical Write-Log - General CLI, ProgramData only)
+# LOGGING BLOCK (embedded canonical scripts/Write-Log.ps1 - copy VERBATIM)
 # Single source of truth: Initialize-Log / Write-Banner / Write-Log / Finish-Script.
 # ============================================================================
 
+# --- Logging (CLI Configuration) --------------------------------------------
+$script:SystemDrive = if ($env:SystemDrive) { $env:SystemDrive.TrimEnd('\') } else {
+    [System.IO.Path]::GetPathRoot($env:SystemRoot).TrimEnd('\')
+}
 $script:LogRoot  = $null
 $script:LogFile  = $null
 $script:LogReady = $false
@@ -187,128 +189,235 @@ function Finish-Script {
         exit $ExitCode
     }
 }
+# ============================================================================
+# MAIN ENTRY LOGGING INITIALIZATION
+# Flow: init -> banner -> modules -> Graph connection -> report generation.
+# ============================================================================
 
 $null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type 'General'
 Write-Banner
-
+if ($script:LogReady) {
+    Write-Log -Message "Log file ready: $($script:LogFile)" -Level 'DEBUG'
+}
+Write-Log -Message "Script started" -Level 'INFO'
 # ============================================================================
-# GRAPH CONNECTION - installs the Beta module on confirmation, then signs in.
+# REPORT OUTPUT ANCHORING
+# Anchor relative output paths beside the script so CSV exports land in a
+# predictable location regardless of the caller's current directory.
+# Fallback chain: $PSScriptRoot -> $PSCommandPath -> $MyInvocation -> Get-Location.
 # ============================================================================
 
-# Ensures the Graph Beta module exists (prompted install) and connects; honors -CreateSession.
-Function Connect_MgGraph
-{
-    # Check if the Microsoft Graph Beta module is installed
-    $MsGraphBetaModule = Get-Module Microsoft.Graph.Beta -ListAvailable
-    if ($MsGraphBetaModule -eq $null)
-    { 
-        Write-Log -Message "⚠️ Microsoft Graph Beta module is missing. It must be installed to run the script successfully." -Level 'WARNING'
-        $confirm = Read-Host "Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No"  
-        if ($confirm -match "[yY]") 
-        { 
-            Write-Log -Message "📦 Installing Microsoft Graph Beta module..." -Level 'INFO'
-            Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
-            Write-Log -Message "✅ Microsoft Graph Beta module installed successfully." -Level 'SUCCESS'
-        } 
-        else
-        { 
-            Write-Log -Message "❌ Exiting. Microsoft Graph Beta module is required for this script." -Level 'ERROR'
-            Exit 
-        } 
+$scriptDirectory = if ($PSScriptRoot) {
+    $PSScriptRoot
+}
+elseif ($PSCommandPath) {
+    Split-Path -Parent $PSCommandPath
+}
+elseif ($MyInvocation.MyCommand.Path) {
+    Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+else {
+    (Get-Location).Path
+}
+
+if ($ExportPath -and -not [System.IO.Path]::IsPathRooted($ExportPath)) {
+    $ExportPath = [System.IO.Path]::GetFullPath((Join-Path $scriptDirectory $ExportPath))
+}
+
+# Local adapters over Write-Log (color->level map and section titles); kept for the call sites below.
+function Write-Status { param([string]$Msg,[string]$Color='Cyan'); $level = switch ($Color) { 'Red'{'ERROR'} 'Yellow'{'WARNING'} 'Green'{'SUCCESS'} 'DarkYellow'{'WARNING'} 'DarkGray'{'DEBUG'} default{'INFO'} }; Write-Log -Message $Msg -Level $level }
+function Write-Section { param([string]$Msg); Write-Log -Message "=== $Msg ===" -Level 'INFO' }
+
+function Get-MgGraphAllPages {
+    param([string]$Uri,[string]$Method='GET')
+    try {
+        $response = Invoke-MgGraphRequest -Uri $Uri -Method $Method -ErrorAction Stop
+        $results = @()
+        if ($null -ne $response.value) { $results += $response.value }
+        elseif ($response) { $results += $response }
+        while ($response.'@odata.nextLink') {
+            $response = Invoke-MgGraphRequest -Uri $response.'@odata.nextLink' -Method GET -ErrorAction Stop
+            if ($null -ne $response.value) { $results += $response.value }
+        }
+        return ,$results
+    } catch [System.Exception] { Write-Verbose "Graph call failed: $_"; return @() }
+}
+
+Write-Section "AUTHENTICATION"
+$context = Get-MgContext
+if (-not $context) {
+    Connect-MgGraph -Scopes 'AuditLog.Read.All','Directory.Read.All' -ErrorAction Stop
+    $context = Get-MgContext
+}
+Write-Status "Signed in as: $($context.Account)" "Green"
+
+Write-Section "FETCHING SIGN-IN LOGS (last $Hours hours)"
+$startDate = (Get-Date).AddHours(-$Hours).ToString('yyyy-MM-ddTHH:mm:ssZ')
+$filter = "createdDateTime ge $startDate"
+if (-not $IncludeSuccessful) {
+    $filter += " and status/errorCode ne 0"
+}
+
+Write-Status "Querying sign-in logs..."
+$signIns = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/auditLogs/signIns?`$filter=$filter&`$top=500&`$orderby=createdDateTime desc"
+Write-Status "$($signIns.Count) sign-in events retrieved" "Green"
+
+if ($signIns.Count -eq 0) {
+    Write-Log -Message "  No sign-in events found for the specified period." -Level 'WARNING'
+    return
+}
+
+$report = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+$failedCount = 0; $mfaFailCount = 0; $legacyAuthCount = 0; $caFailCount = 0
+
+foreach ($si in $signIns) {
+    $errorCode = $si.status.errorCode
+    $failureReason = $si.status.failureReason
+    $isFailure = $errorCode -ne 0
+    $isMfaFail = $errorCode -in @(50074, 50076, 50079, 50072, 53003, 500121, 50158)
+    $isLegacyAuth = $si.clientAppUsed -in @('Exchange ActiveSync','Authenticated SMTP','IMAP4','POP3','MAPI Over HTTP','Autodiscover','Exchange Online PowerShell','Remote PowerShell','Exchange Web Services','Other clients')
+    $caStatus = $si.conditionalAccessStatus
+
+    if ($isFailure) { $failedCount++ }
+    if ($isMfaFail) { $mfaFailCount++ }
+    if ($isLegacyAuth) { $legacyAuthCount++ }
+    if ($caStatus -eq 'failure') { $caFailCount++ }
+
+    $location = ''
+    if ($si.location) {
+        $city = $si.location.city
+        $state = $si.location.state
+        $country = $si.location.countryOrRegion
+        $location = @($city, $state, $country) | Where-Object { $_ } | Join-String -Separator ', '
     }
-    
-    # Disconnect any existing Microsoft Graph sessions if requested
-    if ($CreateSession.IsPresent)
-    {
-        Disconnect-MgGraph
-    }
-    
-    # Connecting to Microsoft Graph
-    Write-Log -Message "🔗 Connecting to Microsoft Graph..." -Level 'INFO'
-    if (($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint 
-    }
-    else
-    {
-        Connect-MgGraph -Scopes "User.Read.All", "AuditLog.read.All"  
+
+    $report.Add([PSCustomObject]@{
+        Timestamp         = $si.createdDateTime
+        UserPrincipalName = $si.userPrincipalName
+        UserDisplayName   = $si.userDisplayName
+        AppDisplayName    = $si.appDisplayName
+        ClientApp         = $si.clientAppUsed
+        IPAddress         = $si.ipAddress
+        Location          = $location
+        Status            = if ($isFailure) { 'Failed' } else { 'Success' }
+        ErrorCode         = $errorCode
+        FailureReason     = $failureReason
+        ConditionalAccess = $caStatus
+        MfaDetail         = if ($si.mfaDetail) { $si.mfaDetail.authMethod } else { '-' }
+        IsLegacyAuth      = $isLegacyAuth
+        IsMfaFailure      = $isMfaFail
+        DeviceDetail      = if ($si.deviceDetail.operatingSystem) { "$($si.deviceDetail.operatingSystem) / $($si.deviceDetail.browser)" } else { '-' }
+        RiskLevel         = $si.riskLevelDuringSignIn
+        RiskState         = $si.riskState
+        ResourceDisplayName = $si.resourceDisplayName
+    })
+}
+
+Write-Section "SIGN-IN ANALYSIS"
+Write-Log -Message "" -Level 'INFO'
+Write-Log -Message "  Total events            : $($signIns.Count)" -Level 'INFO'
+Write-Log -Message "  Failed sign-ins         : $failedCount" -Level 'WARNING'
+Write-Log -Message "  MFA failures            : $mfaFailCount" -Level 'WARNING'
+Write-Log -Message "  Legacy auth attempts    : $legacyAuthCount" -Level 'WARNING'
+Write-Log -Message "  CA policy failures      : $caFailCount" -Level 'WARNING'
+
+# Top failing users
+$topUsers = $report | Where-Object { $_.Status -eq 'Failed' } | Group-Object UserPrincipalName | Sort-Object Count -Descending | Select-Object -First 10
+if ($topUsers.Count -gt 0) {
+    Write-Log -Message "" -Level 'INFO'
+    Write-Log -Message "  --- Top Failing Users ---" -Level 'WARNING'
+    foreach ($u in $topUsers) {
+        Write-Log -Message "    $($u.Name) : $($u.Count) failures" -Level 'INFO'
     }
 }
 
-Connect_MgGraph
-Write-Log -Message "📝 If you encounter module-related conflicts, run the script in a fresh PowerShell window." -Level 'WARNING'
-
-# Define the CSV export path in the script's directory
-$ExportCSV = Join-Path -Path $PSScriptRoot -ChildPath "InactiveM365UserReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd hh-mm-ss tt')).csv"
-$ExportResults = @()  
-
-# Retrieve inactive users
-Write-Log -Message "🔄 Retrieving inactive users from Microsoft 365..." -Level 'INFO'
-$RequiredProperties = @('UserPrincipalName', 'EmployeeId', 'DisplayName', 'CreatedDateTime', 'AccountEnabled', 'Department', 'JobTitle', 'RefreshTokensValidFromDateTime', 'SigninActivity')
-$Count = 0
-$PrintedUser = 0
-
-Get-MgBetaUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object {
-    $Count++
-    $UPN = $_.UserPrincipalName
-    Write-Progress -Activity "🔎 Processing user: $Count - $UPN"
-
-    # Extract user details
-    $LastInteractiveSignIn = $_.SignInActivity.LastSignInDateTime
-    $LastNon_InteractiveSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    
-    # Handle inactive days calculation
-    if ($LastInteractiveSignIn -eq $null) { $LastInteractiveSignIn = "Never Logged In"; $InactiveDays_InteractiveSignIn = "-" }
-    else { $InactiveDays_InteractiveSignIn = (New-TimeSpan -Start $LastInteractiveSignIn).Days }
-    
-    if ($LastNon_InteractiveSignIn -eq $null) { $LastNon_InteractiveSignIn = "Never Logged In"; $InactiveDays_NonInteractiveSignIn = "-" }
-    else { $InactiveDays_NonInteractiveSignIn = (New-TimeSpan -Start $LastNon_InteractiveSignIn).Days }
-    
-    $AccountStatus = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-
-    # Export to CSV and collect the same row for the HTML dashboard.
-    [PSCustomObject]@{
-        
-        'UPN' = $UPN; 'Creation Date' = $_.CreatedDateTime; 'Last Interactive SignIn Date' = $LastInteractiveSignIn;
-        'Last Non Interactive SignIn Date' = $LastNon_InteractiveSignIn; 'Inactive Days(Interactive SignIn)' = $InactiveDays_InteractiveSignIn;
-        'Inactive Days(Non-Interactive Signin)' = $InactiveDays_NonInteractiveSignIn; 'Account Status' = $AccountStatus;
-        'Department' = $_.Department; 'Employee ID' = $_.EmployeeId; 'Employee Name' = $_.DisplayName; 'Job Title' = $_.JobTitle
-    } | ForEach-Object { $ExportResults += $_; $_ } | Export-Csv -Path $ExportCSV -NoTypeInformation -Encoding UTF8 -Append
+# Top failing apps
+$topApps = $report | Where-Object { $_.Status -eq 'Failed' } | Group-Object AppDisplayName | Sort-Object Count -Descending | Select-Object -First 10
+if ($topApps.Count -gt 0) {
+    Write-Log -Message "" -Level 'INFO'
+    Write-Log -Message "  --- Top Failing Apps ---" -Level 'WARNING'
+    foreach ($a in $topApps) {
+        Write-Log -Message "    $($a.Name) : $($a.Count) failures" -Level 'INFO'
+    }
 }
 
-# Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
-$htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
-$htmlRows = @($ExportResults)
+# Top error codes
+$topErrors = $report | Where-Object { $_.ErrorCode -ne 0 } | Group-Object { "$($_.ErrorCode): $($_.FailureReason)" } | Sort-Object Count -Descending | Select-Object -First 10
+if ($topErrors.Count -gt 0) {
+    Write-Log -Message "" -Level 'INFO'
+    Write-Log -Message "  --- Top Error Codes ---" -Level 'WARNING'
+    foreach ($e in $topErrors) {
+        Write-Log -Message "    $($e.Name) ($($e.Count)x)" -Level 'WARNING'
+    }
+}
+
+# Legacy auth
+if ($legacyAuthCount -gt 0) {
+    $legacyApps = $report | Where-Object { $_.IsLegacyAuth } | Group-Object ClientApp | Sort-Object Count -Descending
+    Write-Log -Message "" -Level 'INFO'
+    Write-Log -Message "  --- Legacy Authentication Protocols ---" -Level 'ERROR'
+    foreach ($la in $legacyApps) {
+        Write-Log -Message "    $($la.Name) : $($la.Count) attempts" -Level 'WARNING'
+    }
+}
+
+# Locations
+$topLocations = $report | Where-Object { $_.Location -and $_.Status -eq 'Failed' } | Group-Object Location | Sort-Object Count -Descending | Select-Object -First 10
+if ($topLocations.Count -gt 0) {
+    Write-Log -Message "" -Level 'INFO'
+    Write-Log -Message "  --- Top Locations (failed sign-ins) ---" -Level 'WARNING'
+    foreach ($l in $topLocations) {
+        Write-Log -Message "    $($l.Name) : $($l.Count)" -Level 'INFO'
+    }
+}
+
+# Risky sign-ins
+$risky = $report | Where-Object { $_.RiskLevel -and $_.RiskLevel -notin @('none','hidden','') }
+if ($risky.Count -gt 0) {
+    Write-Log -Message "" -Level 'INFO'
+    Write-Log -Message "  --- Risky Sign-Ins ($($risky.Count)) ---" -Level 'ERROR'
+    foreach ($r in ($risky | Select-Object -First 10)) {
+        Write-Log -Message "    $($r.UserPrincipalName) | Risk: $($r.RiskLevel) | $($r.Location) | $($r.AppDisplayName)" -Level 'WARNING'
+    }
+}
+
+$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$csvPath = if ($ExportPath) { $ExportPath } else { Join-Path $scriptDirectory "SignInReport_$stamp.csv" }
+$htmlPath = [System.IO.Path]::ChangeExtension($csvPath, '.html')
+$report | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+
+# Defensive re-collection: $report must survive for the HTML table (Rule 26).
+$htmlRows = @($report)
+if (-not $htmlRows) { $htmlRows = @() }
 $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    $statusBadge = if ("$($rowRef.'Account Status')" -eq 'Disabled') { 'medium' } else { 'low' }
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UPN)") + '</code></td>' +
-    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Account Status')") + '</span></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Last Interactive SignIn Date')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Inactive Days(Interactive SignIn)')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Department)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Job Title')") + '</td></tr>'
+    $statusBadge = if ($rowRef.Status -eq 'Failed') { 'critical' } else { 'low' }
+    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UserPrincipalName)") + '</code></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.AppDisplayName)") + '</td>' +
+    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Status)") + '</span></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.ErrorCode)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Location)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Timestamp)") + '</td></tr>'
 }
-$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Inactive User Detail</div>' +
-    '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>UPN</th><th>Status</th><th>Last Interactive Sign-In</th><th>Inactive Days</th><th>Department</th><th>Job Title</th></tr></thead><tbody>' +
+$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) events; full data is in the CSV.</p>" } else { '' }
+$tableHtml = '<div class="section-title">Sign-In Detail</div>' +
+    '<div class="card"><h2>Sign-In Events (' + $htmlRows.Count + ')</h2>' +
+    '<table><thead><tr><th>User</th><th>App</th><th>Status</th><th>Error</th><th>Location</th><th>Timestamp</th></tr></thead><tbody>' +
     ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
 
-$disabledCount = @($htmlRows | Where-Object { $_."Account Status" -eq 'Disabled' }).Count
-$neverCount = @($htmlRows | Where-Object { $_."Last Interactive SignIn Date" -eq 'Never Logged In' }).Count
 $kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
-    @{ value = "$disabledCount"; label = 'Disabled users'; color = '#f1c21b' },
-    @{ value = "$neverCount"; label = 'Never logged in'; color = '#da1e28' }
+    @{ value = "$($signIns.Count)"; label = 'Total events'; color = '' },
+    @{ value = "$failedCount"; label = 'Failed sign-ins'; color = '#da1e28' },
+    @{ value = "$mfaFailCount"; label = 'MFA failures'; color = '#f1c21b' },
+    @{ value = "$legacyAuthCount"; label = 'Legacy auth attempts'; color = '#8a3ffc' },
+    @{ value = "$caFailCount"; label = 'CA policy failures'; color = '#da1e28' }
 )
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 Inactive User Report' -Subtitle ("Users: $($htmlRows.Count) | Disabled: $disabledCount | Never logged in: $neverCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 Inactive User Report'
-
-# Final message
-Write-Log -Message "✅ Script executed successfully. Exported report has $($htmlRows.Count) user(s)." -Level 'SUCCESS'
-Write-Log -Message "📄 CSV:  $ExportCSV" -Level 'WARNING'
-Write-Log -Message "📄 HTML: $htmlPath" -Level 'WARNING'
-Invoke-Item "$ExportCSV"
+$mgContext = try { Get-MgContext } catch [System.Exception] { $null }
+$tenantId = if ($mgContext) { $mgContext.TenantId } else { '' }
+Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Entra Sign-In Report' -Subtitle ("Events: $($signIns.Count) | Failed: $failedCount | MFA failures: $mfaFailCount") `
+    -Tenant $tenantId -Body $tableHtml -Kpis $kpis -Version '1.1.0' -ReportName 'Entra Sign-In Report'
+Write-Status "CSV:  $csvPath ($($report.Count) rows)" "Green"
+Write-Status "HTML: $htmlPath" "Green"
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).

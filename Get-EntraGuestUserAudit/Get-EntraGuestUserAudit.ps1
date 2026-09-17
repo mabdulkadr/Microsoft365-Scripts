@@ -1,67 +1,67 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Get-EntraGuestUserAudit - Guest User Security Audit
 
 .SYNOPSIS
-    This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
+    Audits external and guest users in Entra ID for stale access.
 
 .DESCRIPTION
-    - Retrieves user sign-in data from Microsoft Graph API.
-    - Identifies inactive users based on interactive and non-interactive sign-ins.
-    - Filters users based on multiple criteria (enabled users, disabled users, external users, etc.).
-    - Exports results into a properly formatted CSV file with UTF-8 encoding.
-    - Automatically installs the required Microsoft Graph PowerShell module if missing.
-    - Scheduler-friendly for automated execution.
+    Lists all guest users and flags never signed in, inactive for the configured window, group memberships, and invitation status to support external access review and cleanup.
+
+        Scope & safety:
+        - Read-only Graph queries; never modifies guest users.
+        Degradation behavior:
+        - Missing sign-in data treated as never signed in without aborting.
+        Output contract:
+        - Console summary plus CSV beside the script; exit 0 = success, 1 = failure.
 
 .TAGS
-    Identity,M365,Reporting
+    Reporting,EntraID,GuestUsers,Graph
 
 .PLATFORM
-    Windows 10/11/Server 2019+
+    Windows
+
+.MINROLE
+    Intune Service Administrator
 
 .PERMISSIONS
-    User.Read.All, AuditLog.Read.All
+    User.Read.All, AuditLog.Read.All, Directory.Read.All, GroupMember.Read.All
 
 .AUTHOR
     AI Generated
 
 .VERSION
-    1.0.0
+    1.0.1
 
 .CHANGELOG
-    1.0.0 (2026-09-16) - Compliance hardening: canonical rich header, ErrorActionPreference Stop, alias and catch hygiene.
+    1.0.1 (2026-08-26)
+    - Migrated to Enterprise Admin standards (canonical header order, structured logging, PS 5.1 contract)
+    1.0.0
+    - Initial release
 
 .LASTUPDATE
-    2026-09-16
+    2026-08-26
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
-    Runs an inactivity report for users inactive more than 90 days.
+    .\Get-EntraGuestUserAudit.ps1
+    Audits guest users with default 90-day inactivity window.
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
-    Lists enabled users who never logged in (provisioning cleanup).
+    .\Get-EntraGuestUserAudit.ps1 -InactiveDays 60
+    Audits with a 60-day inactivity window.
 
 .NOTES
-    Part of Microsoft365-Scripts toolkit - Identity,M365,Reporting
-    Exit codes: 0 = success, 1 = failure, 2 = script error
-    Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
+    - Requires Microsoft.Graph.Authentication module.
+        - Read-only; no guest modifications.
+        - Logs: C:\ProgramData\Get-EntraGuestUserAudit\Logs\
 #>
 
 #Requires -Version 5.1
 
-Param
-(
-    [int]$InactiveDays,
-    [int]$InactiveDays_NonInteractive,
-    [switch]$ReturnNeverLoggedInUser,
-    [switch]$EnabledUsersOnly,
-    [switch]$DisabledUsersOnly,
-    [switch]$ExternalUsersOnly,
-    [switch]$CreateSession,
-    [string]$TenantId,
-    [string]$ClientId,
-    [string]$CertificateThumbprint
+[CmdletBinding()]
+param(
+    [Parameter()][int]$InactiveDays = 90,
+    [Parameter()][string]$ExportPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,14 +70,18 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'GetM365InactiveUserReport'
+$SolutionName = 'Get-EntraGuestUserAudit'
 $ScriptMode   = 'run'
 
 # ============================================================================
-# LOGGING BLOCK (embedded canonical Write-Log - General CLI, ProgramData only)
+# LOGGING BLOCK (embedded canonical scripts/Write-Log.ps1 - copy VERBATIM)
 # Single source of truth: Initialize-Log / Write-Banner / Write-Log / Finish-Script.
 # ============================================================================
 
+# --- Logging (CLI Configuration) --------------------------------------------
+$script:SystemDrive = if ($env:SystemDrive) { $env:SystemDrive.TrimEnd('\') } else {
+    [System.IO.Path]::GetPathRoot($env:SystemRoot).TrimEnd('\')
+}
 $script:LogRoot  = $null
 $script:LogFile  = $null
 $script:LogReady = $false
@@ -188,132 +192,273 @@ function Finish-Script {
     }
 }
 
+# ============================================================================
+# REPORT OUTPUT ANCHORING (Law 12)
+# Anchors relative output paths beside the script using fallback chain.
+# ============================================================================
+
+$scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot }
+elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+else { (Get-Location).Path }
+
+# Resolve relative ExportPath/OutputPath beside the script (Law 12).
+if ($PSBoundParameters.ContainsKey('ExportPath') -and $ExportPath -and -not [System.IO.Path]::IsPathRooted($ExportPath)) {
+    $ExportPath = Join-Path $scriptDirectory $ExportPath
+}
+if ($PSBoundParameters.ContainsKey('OutputPath') -and $OutputPath -and -not [System.IO.Path]::IsPathRooted($OutputPath)) {
+    $OutputPath = Join-Path $scriptDirectory $OutputPath
+}
+
+
+# ============================================================================
+# MAIN ENTRY LOGGING INITIALIZATION
+# ============================================================================
+
 $null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type 'General'
 Write-Banner
+if ($script:LogReady) {
+    Write-Log -Message "Log file ready: $($script:LogFile)" -Level 'DEBUG'
+}
+Write-Log -Message "Script started: Get-EntraGuestUserAudit" -Level 'INFO'
 
 # ============================================================================
-# GRAPH CONNECTION - installs the Beta module on confirmation, then signs in.
+# AUTHENTICATION - reuses an existing Graph session, else signs in interactively.
 # ============================================================================
 
-# Ensures the Graph Beta module exists (prompted install) and connects; honors -CreateSession.
-Function Connect_MgGraph
-{
-    # Check if the Microsoft Graph Beta module is installed
-    $MsGraphBetaModule = Get-Module Microsoft.Graph.Beta -ListAvailable
-    if ($MsGraphBetaModule -eq $null)
-    { 
-        Write-Log -Message "⚠️ Microsoft Graph Beta module is missing. It must be installed to run the script successfully." -Level 'WARNING'
-        $confirm = Read-Host "Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No"  
-        if ($confirm -match "[yY]") 
-        { 
-            Write-Log -Message "📦 Installing Microsoft Graph Beta module..." -Level 'INFO'
-            Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
-            Write-Log -Message "✅ Microsoft Graph Beta module installed successfully." -Level 'SUCCESS'
-        } 
-        else
-        { 
-            Write-Log -Message "❌ Exiting. Microsoft Graph Beta module is required for this script." -Level 'ERROR'
-            Exit 
-        } 
+Write-Log -Message "=== AUTHENTICATION ===" -Level 'INFO'
+$mgContext = Get-MgContext
+if (-not $mgContext) {
+    Connect-MgGraph -Scopes 'User.Read.All', 'AuditLog.Read.All', 'Directory.Read.All', 'GroupMember.Read.All' -ErrorAction Stop
+    $mgContext = Get-MgContext
+}
+Write-Log -Message "Signed in as: $($mgContext.Account)" -Level 'SUCCESS'
+
+# ============================================================================
+# COLLECTION - every guest with sign-in aging and group memberships (paged).
+# why: per-guest memberOf lookup is one extra call per guest; progress shows it.
+# ============================================================================
+
+Write-Log -Message "=== GUEST USER INVENTORY ===" -Level 'INFO'
+try {
+    $guests = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/users?`$filter=userType eq 'Guest'&`$select=id,userPrincipalName,displayName,mail,createdDateTime,externalUserState,externalUserStateChangeDateTime,accountEnabled,signInActivity"
+} catch [System.Exception] {
+    Finish-Script -ExitCode 2 -Message "Failed to query guest users: $($_.Exception.Message)" -Level 'ERROR'
+}
+$guests = @($guests)
+Write-Log -Message "$($guests.Count) guest users found" -Level 'SUCCESS'
+
+$report = [System.Collections.Generic.List[PSCustomObject]]::new()
+$neverSignedIn = 0; $staleCount = 0; $pendingInvite = 0; $disabledCount = 0
+
+if ($guests.Count -eq 0) {
+    Write-Log -Message "No guest users in this tenant." -Level 'SUCCESS'
+} else {
+    $now = Get-Date
+    $guestIndex = 0
+
+    foreach ($g in $guests) {
+        $guestIndex++
+        Write-Progress -Activity 'Auditing guest users' -Status "Guest $guestIndex of $($guests.Count)" -PercentComplete (($guestIndex / [Math]::Max($guests.Count, 1)) * 100)
+
+        $lastSignIn = $null; $daysSinceSignIn = 999
+        if ($g.signInActivity -and $g.signInActivity.lastSignInDateTime) {
+            $lastSignIn = [datetime]$g.signInActivity.lastSignInDateTime
+            $daysSinceSignIn = [math]::Round(($now - $lastSignIn).TotalDays, 0)
+        }
+
+        $neverSignedInFlag = -not $lastSignIn
+        $isStale = $daysSinceSignIn -gt $InactiveDays
+        $isPending = $g.externalUserState -eq 'PendingAcceptance'
+        $isDisabled = -not $g.accountEnabled
+
+        if ($neverSignedInFlag) { $neverSignedIn++ }
+        if ($isStale -and -not $neverSignedInFlag) { $staleCount++ }
+        if ($isPending) { $pendingInvite++ }
+        if ($isDisabled) { $disabledCount++ }
+
+        $groupCount = 0
+        $groupNames = '-'
+        try {
+            $memberOf = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/users/$($g.id)/memberOf?`$select=id,displayName&`$top=50" -Method GET -ErrorAction Stop
+            if ($memberOf.value) {
+                $groups = @($memberOf.value | Where-Object { $_.'@odata.type' -eq '#microsoft.graph.group' })
+                $groupCount = $groups.Count
+                $groupNames = ($groups | ForEach-Object { $_.displayName }) -join '; '
+            }
+        } catch [System.Exception] {
+            Write-Log -Message "Group lookup failed for '$($g.userPrincipalName)'; continuing." -Level 'DEBUG'
+        }
+
+        $issues = @()
+        if ($neverSignedInFlag) { $issues += 'Never signed in' }
+        elseif ($isStale) { $issues += "Inactive $daysSinceSignIn days" }
+        if ($isPending) { $issues += 'Invitation pending' }
+        if ($isDisabled) { $issues += 'Account disabled' }
+
+        $report.Add([PSCustomObject]@{
+            DisplayName       = $g.displayName
+            Email             = $g.mail
+            UserPrincipalName = $g.userPrincipalName
+            AccountEnabled    = $g.accountEnabled
+            InvitationState   = $g.externalUserState
+            Created           = $g.createdDateTime
+            LastSignIn        = $lastSignIn
+            DaysSinceSignIn   = if ($neverSignedInFlag) { 'Never' } else { $daysSinceSignIn }
+            GroupCount        = $groupCount
+            Groups            = $groupNames
+            IsStale           = $isStale
+            NeverSignedIn     = $neverSignedInFlag
+            Issues            = if ($issues.Count -gt 0) { $issues -join '; ' } else { '-' }
+        })
     }
-    
-    # Disconnect any existing Microsoft Graph sessions if requested
-    if ($CreateSession.IsPresent)
-    {
-        Disconnect-MgGraph
-    }
-    
-    # Connecting to Microsoft Graph
-    Write-Log -Message "🔗 Connecting to Microsoft Graph..." -Level 'INFO'
-    if (($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint 
-    }
-    else
-    {
-        Connect-MgGraph -Scopes "User.Read.All", "AuditLog.read.All"  
+    Write-Progress -Activity 'Auditing guest users' -Completed
+
+    Write-Log -Message "=== GUEST USER AUDIT SUMMARY ===" -Level 'INFO'
+    Write-Log -Message "Total guests           : $($guests.Count)" -Level 'INFO'
+    Write-Log -Message "Never signed in        : $neverSignedIn" -Level $(if ($neverSignedIn -gt 0) { 'ERROR' } else { 'SUCCESS' })
+    Write-Log -Message "Inactive ($InactiveDays+ days)   : $staleCount" -Level $(if ($staleCount -gt 0) { 'WARNING' } else { 'SUCCESS' })
+    Write-Log -Message "Pending invitation     : $pendingInvite" -Level $(if ($pendingInvite -gt 0) { 'WARNING' } else { 'SUCCESS' })
+    Write-Log -Message "Disabled accounts      : $disabledCount" -Level 'DEBUG'
+
+    $issueGuests = @($report | Where-Object { $_.Issues -ne '-' })
+    if ($issueGuests.Count -gt 0) {
+        Write-Log -Message "Guests with issues ($($issueGuests.Count))" -Level 'WARNING'
+        foreach ($ig in ($issueGuests | Sort-Object { if ($_.NeverSignedIn) { 0 } else { 1 } } | Select-Object -First 20)) {
+            Write-Log -Message "$($ig.Email) | $($ig.Issues) | Groups: $($ig.GroupCount)" -Level 'INFO'
+        }
     }
 }
 
-Connect_MgGraph
-Write-Log -Message "📝 If you encounter module-related conflicts, run the script in a fresh PowerShell window." -Level 'WARNING'
-
-# Define the CSV export path in the script's directory
-$ExportCSV = Join-Path -Path $PSScriptRoot -ChildPath "InactiveM365UserReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd hh-mm-ss tt')).csv"
-$ExportResults = @()  
-
-# Retrieve inactive users
-Write-Log -Message "🔄 Retrieving inactive users from Microsoft 365..." -Level 'INFO'
-$RequiredProperties = @('UserPrincipalName', 'EmployeeId', 'DisplayName', 'CreatedDateTime', 'AccountEnabled', 'Department', 'JobTitle', 'RefreshTokensValidFromDateTime', 'SigninActivity')
-$Count = 0
-$PrintedUser = 0
-
-Get-MgBetaUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object {
-    $Count++
-    $UPN = $_.UserPrincipalName
-    Write-Progress -Activity "🔎 Processing user: $Count - $UPN"
-
-    # Extract user details
-    $LastInteractiveSignIn = $_.SignInActivity.LastSignInDateTime
-    $LastNon_InteractiveSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    
-    # Handle inactive days calculation
-    if ($LastInteractiveSignIn -eq $null) { $LastInteractiveSignIn = "Never Logged In"; $InactiveDays_InteractiveSignIn = "-" }
-    else { $InactiveDays_InteractiveSignIn = (New-TimeSpan -Start $LastInteractiveSignIn).Days }
-    
-    if ($LastNon_InteractiveSignIn -eq $null) { $LastNon_InteractiveSignIn = "Never Logged In"; $InactiveDays_NonInteractiveSignIn = "-" }
-    else { $InactiveDays_NonInteractiveSignIn = (New-TimeSpan -Start $LastNon_InteractiveSignIn).Days }
-    
-    $AccountStatus = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-
-    # Export to CSV and collect the same row for the HTML dashboard.
-    [PSCustomObject]@{
-        
-        'UPN' = $UPN; 'Creation Date' = $_.CreatedDateTime; 'Last Interactive SignIn Date' = $LastInteractiveSignIn;
-        'Last Non Interactive SignIn Date' = $LastNon_InteractiveSignIn; 'Inactive Days(Interactive SignIn)' = $InactiveDays_InteractiveSignIn;
-        'Inactive Days(Non-Interactive Signin)' = $InactiveDays_NonInteractiveSignIn; 'Account Status' = $AccountStatus;
-        'Department' = $_.Department; 'Employee ID' = $_.EmployeeId; 'Employee Name' = $_.DisplayName; 'Job Title' = $_.JobTitle
-    } | ForEach-Object { $ExportResults += $_; $_ } | Export-Csv -Path $ExportCSV -NoTypeInformation -Encoding UTF8 -Append
+# Guests with most group memberships
+$topGroupGuests = $report | Where-Object { $_.GroupCount -gt 3 } | Sort-Object GroupCount -Descending | Select-Object -First 10
+if ($topGroupGuests.Count -gt 0) {
+    Write-Log -Message "--- Guests with Most Group Memberships ---" -Level 'WARNING'
+    foreach ($tg in $topGroupGuests) {
+        Write-Log -Message "$($tg.Email) : $($tg.GroupCount) groups" -Level 'INFO'
+    }
 }
 
-# Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
-$htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
-$htmlRows = @($ExportResults)
+$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$csvPath = if ($ExportPath) { $ExportPath } else { Join-Path $scriptDirectory "GuestAudit_$stamp.csv" }
+$htmlPath = [System.IO.Path]::ChangeExtension($csvPath, '.html')
+$report | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+
+# Defensive re-collection: $report must survive for the HTML table (Rule 26).
+$htmlRows = @($report)
+if (-not $htmlRows) { $htmlRows = @() }
 $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    $statusBadge = if ("$($rowRef.'Account Status')" -eq 'Disabled') { 'medium' } else { 'low' }
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UPN)") + '</code></td>' +
-    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Account Status')") + '</span></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Last Interactive SignIn Date')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Inactive Days(Interactive SignIn)')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Department)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Job Title')") + '</td></tr>'
+    $issueBadge = if ($rowRef.Issues -and $rowRef.Issues -ne '-') { 'medium' } else { 'low' }
+    '<tr><td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.DisplayName)") + '</td>' +
+    '<td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Email)") + '</code></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.InvitationState)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.LastSignIn)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.DaysSinceSignIn)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.GroupCount)") + '</td>' +
+    '<td><span class="badge ' + $issueBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Issues)") + '</span></td></tr>'
 }
-$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Inactive User Detail</div>' +
-    '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>UPN</th><th>Status</th><th>Last Interactive Sign-In</th><th>Inactive Days</th><th>Department</th><th>Job Title</th></tr></thead><tbody>' +
+$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) guests; full data is in the CSV.</p>" } else { '' }
+$tableHtml = '<div class="section-title">Guest Audit Detail</div>' +
+    '<div class="card"><h2>All Guests (' + $htmlRows.Count + ')</h2>' +
+    '<table><thead><tr><th>Display Name</th><th>Email</th><th>Invitation</th><th>Last Sign-In</th><th>Days Silent</th><th>Groups</th><th>Issues</th></tr></thead><tbody>' +
     ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
 
-$disabledCount = @($htmlRows | Where-Object { $_."Account Status" -eq 'Disabled' }).Count
-$neverCount = @($htmlRows | Where-Object { $_."Last Interactive SignIn Date" -eq 'Never Logged In' }).Count
 $kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
-    @{ value = "$disabledCount"; label = 'Disabled users'; color = '#f1c21b' },
-    @{ value = "$neverCount"; label = 'Never logged in'; color = '#da1e28' }
+    @{ value = "$($htmlRows.Count)"; label = 'Guest users'; color = '' },
+    @{ value = "$neverSignedIn"; label = 'Never signed in'; color = '#da1e28' },
+    @{ value = "$staleCount"; label = "Inactive ($InactiveDays+ days)"; color = '#f1c21b' },
+    @{ value = "$pendingInvite"; label = 'Pending invitation'; color = '#f1c21b' },
+    @{ value = "$disabledCount"; label = 'Disabled accounts'; color = '' }
 )
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 Inactive User Report' -Subtitle ("Users: $($htmlRows.Count) | Disabled: $disabledCount | Never logged in: $neverCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 Inactive User Report'
+$tenantId = if ($mgContext) { $mgContext.TenantId } else { '' }
+Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Entra Guest User Audit' -Subtitle ("Guests: $($htmlRows.Count) | Never signed in: $neverSignedIn | Stale: $staleCount") `
+    -Tenant $tenantId -Body $tableHtml -Kpis $kpis -Version '1.0.1' -ReportName 'Entra Guest User Audit'
+Write-Log -Message "CSV:  $csvPath ($($report.Count) rows)" -Level 'INFO'
+Write-Log -Message "HTML: $htmlPath" -Level 'INFO'
 
-# Final message
-Write-Log -Message "✅ Script executed successfully. Exported report has $($htmlRows.Count) user(s)." -Level 'SUCCESS'
-Write-Log -Message "📄 CSV:  $ExportCSV" -Level 'WARNING'
-Write-Log -Message "📄 HTML: $htmlPath" -Level 'WARNING'
-Invoke-Item "$ExportCSV"
+# ============================================================================
+# GRAPH PAGINATION (embedded canonical Get-MgGraphAllPages v1.1.0, function only).
+# Follows @odata.nextLink with 429 backoff; uses Invoke-MgGraphRequest.
+# ============================================================================
+
+function Get-MgGraphAllPages {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+        [int]$DelayMs = 100,
+        [hashtable]$Headers = @{},
+        [int]$Max429Retries = 3
+    )
+
+    [System.Collections.Generic.List[PSCustomObject]]$allResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $nextLink = $Uri
+    $requestCount = 0
+    $consecutive429 = 0
+
+    do {
+        try {
+            if ($requestCount -gt 0 -and $DelayMs -gt 0) {
+                Start-Sleep -Milliseconds $DelayMs
+            }
+
+            $params = @{
+                Uri         = $nextLink
+                Method      = 'GET'
+                Headers     = $Headers
+                ErrorAction = 'Stop'
+            }
+
+            $response = Invoke-MgGraphRequest @params
+            $requestCount++
+            $consecutive429 = 0 # Reset throttle counter on success
+
+            if ($null -ne $response.value) {
+                foreach ($item in $response.value) {
+                    $allResults.Add($item)
+                }
+            }
+            else {
+                $allResults.Add($response)
+            }
+
+            $nextLink = $response.'@odata.nextLink'
+
+            if ($requestCount % 10 -eq 0) {
+                Write-Verbose "Processed $requestCount API pages, retrieved $($allResults.Count) items..."
+            }
+        }
+        catch {
+            $is429 = ($_.Exception.Message -like '*429*') -or ($_.Exception.Message -like '*throttled*')
+            if ($is429) {
+                $consecutive429++
+                if ($consecutive429 -gt $Max429Retries) {
+                    throw "Rate limit exceeded (HTTP 429). Maximum retries ($Max429Retries) reached for $nextLink"
+                }
+                # Honor Retry-After header if present, else exponential backoff capped at 60s
+                $retryAfter = $null
+                try {
+                    if ($_.Exception.Response -and $_.Exception.Response.Headers) {
+                        $retryAfter = $_.Exception.Response.Headers['Retry-After']
+                        if (-not $retryAfter) { $retryAfter = $_.Exception.Response.Headers['retry-after'] }
+                    }
+                } catch [System.Exception] {
+                    $retryAfter = $null
+                }
+                $delaySec = if ($retryAfter -and [int]::TryParse($retryAfter.ToString().Split(',')[0], [ref]$null)) { [int]$retryAfter.ToString().Split(',')[0] } else { [Math]::Min(60, [Math]::Pow(2, $consecutive429) * 5) }
+                Write-Warning "Rate limit hit (attempt $consecutive429/$Max429Retries), waiting $delaySec seconds..."
+                Start-Sleep -Seconds $delaySec
+                continue
+            }
+            throw "Error fetching data from $nextLink : $($_.Exception.Message)"
+        }
+    } while ($nextLink)
+
+    return $allResults
+}
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).
-# Six functions copied verbatim (Get-StandardHtmlHead/Open/Footer/Close/ChartScripts + Export-StandardHtmlReport);
-# file-level header omitted. IBM Carbon Dark is the only approved HTML design system.
 # ============================================================================
 
 # ============================================================================

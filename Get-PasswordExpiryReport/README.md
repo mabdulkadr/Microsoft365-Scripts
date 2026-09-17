@@ -1,10 +1,10 @@
 <div align="center">
 
-# 💻 Add-DevicesToAzureADGroup
+# 💻 Get-PasswordExpiryReport
 
-**Bulk-add devices to an Entra ID group by device name.**
+**Microsoft 365 password expiry reports via Microsoft Graph.**
 
-Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
+One script, six report angles: full inventory, never-expires, expired, soon-to-expire, recent changers — sliced by license and sign-in status.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,26 +20,25 @@ Resolves names to Device Object IDs first — the step Azure AD's bulk import ca
 
 # 📖 Overview
 
-**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
+**Get-PasswordExpiryReport** is a PowerShell script that exports Office 365 users' last password change and expiry dates via Microsoft Graph. It auto-installs the Graph SDK on confirmation, supports certificate-based app auth and MFA accounts, and writes every report to CSV.
 
 ---
 
 # ✨ Features
 
-* Bulk add from a CSV of device names
-* Automatic Device ID lookup per name
-* Handles duplicate device names (adds all matches)
-* Skips not-found / already-member devices with per-device output
+* Six report angles: all users, never-expires, expired, soon-to-expire, recent changers
+* Scope slices: all vs licensed users, all vs sign-in-enabled users
+* Certificate-based authentication + MFA-friendly interactive sign-in
+* CSV + Carbon Dark HTML dashboard exports for every angle
 
 ---
 
 # 📂 Project Structure
 
 ```text
-Add-DevicesToAzureADGroup
+Get-PasswordExpiryReport
 │
-├── Add-DevicesToAzureADGroup.ps1
-├── SampleDevicesFile.csv
+├── Get-PasswordExpiryReport.ps1
 └── README.md
 ```
 
@@ -49,18 +48,14 @@ Add-DevicesToAzureADGroup
 
 ### Basic Usage
 ```powershell
-.\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
+.\Get-PasswordExpiryReport.ps1
 ```
 
-### CSV Format
-```csv
-DeviceName
-Device-01
-Device-02
-Device-03
+### With Parameters
+```powershell
+.\Get-PasswordExpiryReport.ps1 -PwdNeverExpires
+.\Get-PasswordExpiryReport.ps1 -SoonToExpire 14 -LicensedUserOnly
 ```
-
-Device names must match Entra ID exactly.
 
 ---
 
@@ -68,14 +63,22 @@ Device names must match Entra ID exactly.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `GroupName` | String | Yes | — | Target Entra ID group name. |
-| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
+| `PwdNeverExpires` | Switch | No | off | Only users with passwords set to never expire. |
+| `PwdExpired` | Switch | No | off | Only users with expired passwords. |
+| `LicensedUserOnly` | Switch | No | off | Only licensed users. |
+| `SoonToExpire` | Int | No | (off) | Users expiring within N days. |
+| `RecentPwdChanges` | Int | No | (off) | Users changed within the last N days. |
+| `EnabledUsersOnly` | Switch | No | off | Only sign-in-enabled users. |
+| `TenantId` | String | No | (interactive) | Tenant ID for certificate app auth. |
+| `ClientId` | String | No | (interactive) | App (client) ID for certificate app auth. |
+| `CertificateThumbprint` | String | No | (interactive) | Certificate thumbprint for app auth. |
 
 ### Exit Codes
 | Code | Status |
 | ---- | ------ |
 | 0    | Success |
 | 1    | Failure |
+| 2    | Script error |
 
 ---
 
@@ -86,18 +89,17 @@ Device names must match Entra ID exactly.
 
 ### PowerShell
 * PowerShell **5.1 or later**
-* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
+* MS Graph PowerShell SDK (installed on confirmation if missing)
 
 ### Permissions
-* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
+* `User.Read.All`, `Directory.Read.All` (Microsoft Graph).
 
 ---
 
 # 🛡 Operational Notes
-* Connects to Azure AD automatically before operating.
-* Members already in the group are skipped, not errored.
-* Sample input: `SampleDevicesFile.csv` in this folder.
-* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
+* Combine switches to narrow scope, e.g. `-PwdExpired -LicensedUserOnly -EnabledUsersOnly`.
+* For unattended runs, supply `TenantId` + `ClientId` + `CertificateThumbprint`.
+* Treat expiry exports as sensitive — they enumerate account hygiene tenant-wide.
 
 ---
 

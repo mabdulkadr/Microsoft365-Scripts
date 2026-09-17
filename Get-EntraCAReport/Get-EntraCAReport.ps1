@@ -1,67 +1,80 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Get-EntraCAReport - Conditional Access Policy Report
 
 .SYNOPSIS
-    This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
+    Generates a comprehensive Conditional Access policy report from Entra ID.
 
 .DESCRIPTION
-    - Retrieves user sign-in data from Microsoft Graph API.
-    - Identifies inactive users based on interactive and non-interactive sign-ins.
-    - Filters users based on multiple criteria (enabled users, disabled users, external users, etc.).
-    - Exports results into a properly formatted CSV file with UTF-8 encoding.
-    - Automatically installs the required Microsoft Graph PowerShell module if missing.
-    - Scheduler-friendly for automated execution.
+    Queries Microsoft Graph to retrieve all Conditional Access policies and expands them into a readable report with state, user and group targets, application targets, platform and location conditions, grant controls, and session controls for security auditing and change review.
+
+        Scope & safety:
+        - Read-only Graph queries; never modifies policies.
+        Degradation behavior:
+        - Unresolvable group or app IDs render as raw IDs without failing the report.
+        Output contract:
+        - Console summary plus CSV beside the script; exit 0 = success, 1 = failure.
 
 .TAGS
-    Identity,M365,Reporting
+    Reporting,EntraID,ConditionalAccess,Graph
 
 .PLATFORM
-    Windows 10/11/Server 2019+
+    Windows
+
+.MINROLE
+    Intune Service Administrator
 
 .PERMISSIONS
-    User.Read.All, AuditLog.Read.All
+    Policy.Read.All, Directory.Read.All, Application.Read.All, Group.Read.All
 
 .AUTHOR
     AI Generated
 
 .VERSION
-    1.0.0
+    1.0.1
 
 .CHANGELOG
-    1.0.0 (2026-09-16) - Compliance hardening: canonical rich header, ErrorActionPreference Stop, alias and catch hygiene.
+    1.0.1 (2026-08-26)
+    - Migrated to Enterprise Admin standards (canonical header order, structured logging, PS 5.1 contract)
+    1.0.0
+    - Initial release
 
 .LASTUPDATE
-    2026-09-16
+    2026-08-26
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
-    Runs an inactivity report for users inactive more than 90 days.
+    .\Get-EntraCAReport.ps1
+    Exports all enabled and report-only Conditional Access policies.
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
-    Lists enabled users who never logged in (provisioning cleanup).
+    .\\Get-EntraCAReport.ps1 -PolicyName "MFA" -IncludeDisabled
+    Exports policies matching MFA including disabled ones.
+
+.EXAMPLE
+    .\\Get-EntraCAReport.ps1 -EnabledOnly -ExportPath "C:\\temp\\ca_policies.csv"
+    Exports active policies only to a specific CSV.
 
 .NOTES
-    Part of Microsoft365-Scripts toolkit - Identity,M365,Reporting
-    Exit codes: 0 = success, 1 = failure, 2 = script error
-    Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
+    - Requires Microsoft.Graph.Authentication module.
+        - Read-only; no policy changes.
+        - Logs: C:\ProgramData\Get-EntraCAReport\Logs\
 #>
 
 #Requires -Version 5.1
 
-Param
-(
-    [int]$InactiveDays,
-    [int]$InactiveDays_NonInteractive,
-    [switch]$ReturnNeverLoggedInUser,
-    [switch]$EnabledUsersOnly,
-    [switch]$DisabledUsersOnly,
-    [switch]$ExternalUsersOnly,
-    [switch]$CreateSession,
-    [string]$TenantId,
-    [string]$ClientId,
-    [string]$CertificateThumbprint
+[CmdletBinding()]
+param(
+    [Parameter()]
+    [string]$PolicyName,
+
+    [Parameter()]
+    [switch]$EnabledOnly,
+
+    [Parameter()]
+    [switch]$IncludeDisabled,
+
+    [Parameter()]
+    [string]$ExportPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,14 +83,18 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'GetM365InactiveUserReport'
+$SolutionName = 'Get-EntraCAReport'
 $ScriptMode   = 'run'
 
 # ============================================================================
-# LOGGING BLOCK (embedded canonical Write-Log - General CLI, ProgramData only)
+# LOGGING BLOCK (embedded canonical scripts/Write-Log.ps1 - copy VERBATIM)
 # Single source of truth: Initialize-Log / Write-Banner / Write-Log / Finish-Script.
 # ============================================================================
 
+# --- Logging (CLI Configuration) --------------------------------------------
+$script:SystemDrive = if ($env:SystemDrive) { $env:SystemDrive.TrimEnd('\') } else {
+    [System.IO.Path]::GetPathRoot($env:SystemRoot).TrimEnd('\')
+}
 $script:LogRoot  = $null
 $script:LogFile  = $null
 $script:LogReady = $false
@@ -188,132 +205,487 @@ function Finish-Script {
     }
 }
 
+# ============================================================================
+# REPORT OUTPUT ANCHORING (Law 12)
+# Anchors relative output paths beside the script using fallback chain.
+# ============================================================================
+
+$scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot }
+elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+else { (Get-Location).Path }
+
+# Resolve relative ExportPath/OutputPath beside the script (Law 12).
+if ($PSBoundParameters.ContainsKey('ExportPath') -and $ExportPath -and -not [System.IO.Path]::IsPathRooted($ExportPath)) {
+    $ExportPath = Join-Path $scriptDirectory $ExportPath
+}
+if ($PSBoundParameters.ContainsKey('OutputPath') -and $OutputPath -and -not [System.IO.Path]::IsPathRooted($OutputPath)) {
+    $OutputPath = Join-Path $scriptDirectory $OutputPath
+}
+
+
+# ============================================================================
+# MAIN ENTRY LOGGING INITIALIZATION
+# ============================================================================
+
 $null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type 'General'
 Write-Banner
+if ($script:LogReady) {
+    Write-Log -Message "Log file ready: $($script:LogFile)" -Level 'DEBUG'
+}
+Write-Log -Message "Script started: Get-EntraCAReport" -Level 'INFO'
 
 # ============================================================================
-# GRAPH CONNECTION - installs the Beta module on confirmation, then signs in.
+# AUTHENTICATION - reuses an existing Graph session, else signs in interactively.
 # ============================================================================
 
-# Ensures the Graph Beta module exists (prompted install) and connects; honors -CreateSession.
-Function Connect_MgGraph
-{
-    # Check if the Microsoft Graph Beta module is installed
-    $MsGraphBetaModule = Get-Module Microsoft.Graph.Beta -ListAvailable
-    if ($MsGraphBetaModule -eq $null)
-    { 
-        Write-Log -Message "⚠️ Microsoft Graph Beta module is missing. It must be installed to run the script successfully." -Level 'WARNING'
-        $confirm = Read-Host "Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No"  
-        if ($confirm -match "[yY]") 
-        { 
-            Write-Log -Message "📦 Installing Microsoft Graph Beta module..." -Level 'INFO'
-            Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
-            Write-Log -Message "✅ Microsoft Graph Beta module installed successfully." -Level 'SUCCESS'
-        } 
-        else
-        { 
-            Write-Log -Message "❌ Exiting. Microsoft Graph Beta module is required for this script." -Level 'ERROR'
-            Exit 
-        } 
+Write-Log -Message "=== AUTHENTICATION ===" -Level 'INFO'
+$mgContext = Get-MgContext
+if (-not $mgContext) {
+    Connect-MgGraph -Scopes 'Policy.Read.All', 'Directory.Read.All', 'Application.Read.All', 'Group.Read.All' -ErrorAction Stop
+    $mgContext = Get-MgContext
+}
+Write-Log -Message "Signed in as: $($mgContext.Account)" -Level 'SUCCESS'
+
+# ============================================================================
+# RESOLVERS - ID-to-name lookups with caches (users/groups/roles, apps, locations).
+# ============================================================================
+
+# Resolves Entra object IDs to display names; unknown IDs pass through unchanged.
+function Resolve-DirectoryObjectNames {
+    param([string[]]$ObjectIds, [hashtable]$Cache)
+    $names = @()
+    foreach ($id in $ObjectIds) {
+        if ($id -eq 'All') { $names += 'All Users'; continue }
+        if ($id -eq 'GuestsOrExternalUsers') { $names += 'Guests/External Users'; continue }
+        if ($id -eq 'None') { continue }
+        if ($Cache.ContainsKey($id)) { $names += $Cache[$id]; continue }
+        try {
+            $obj = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/directoryObjects/$id?`$select=displayName"
+            $first = @($obj)[0]
+        } catch [System.Exception] { $first = $null }
+        if ($first -and $first.displayName) {
+            $odataType = if ($first.'@odata.type') { $first.'@odata.type' } elseif ($first.AdditionalProperties) { $first.AdditionalProperties['@odata.type'] } else { '' }
+            $typeShort = switch -Wildcard ("$odataType") {
+                '*group*'            { 'Group' }
+                '*user*'             { 'User' }
+                '*servicePrincipal*' { 'App' }
+                '*directoryRole*'    { 'Role' }
+                default              { '' }
+            }
+            $resolved = if ($typeShort) { "$($first.displayName) [$typeShort]" } else { $first.displayName }
+            $Cache[$id] = $resolved
+            $names += $resolved
+        } else {
+            $Cache[$id] = $id
+            $names += $id
+        }
     }
-    
-    # Disconnect any existing Microsoft Graph sessions if requested
-    if ($CreateSession.IsPresent)
-    {
-        Disconnect-MgGraph
+    return $names
+}
+
+# Resolves application IDs to names via well-known map, cache, then service principals.
+function Resolve-AppNames {
+    param([string[]]$AppIds, [hashtable]$Cache)
+    $names = @()
+    foreach ($id in $AppIds) {
+        $wellKnown = switch ($id) {
+            'All'                                  { 'All cloud apps' }
+            'Office365'                            { 'Office 365' }
+            'MicrosoftAdminPortals'                { 'Microsoft Admin Portals' }
+            '00000002-0000-0ff1-ce00-000000000000' { 'Office 365 Exchange Online' }
+            '00000003-0000-0ff1-ce00-000000000000' { 'Office 365 SharePoint Online' }
+            '00000004-0000-0ff1-ce00-000000000000' { 'Skype for Business' }
+            '797f4846-ba00-4fd7-ba43-dac1f8f63013' { 'Windows Azure Service Management API' }
+            '0000000c-0000-0000-c000-000000000000' { 'Microsoft App Access Panel' }
+            '00000002-0000-0000-c000-000000000000' { 'Microsoft Graph (legacy)' }
+            '00000003-0000-0000-c000-000000000000' { 'Microsoft Graph' }
+            default { $null }
+        }
+        if ($wellKnown) { $names += $wellKnown; continue }
+        if ($Cache.ContainsKey($id)) { $names += $Cache[$id]; continue }
+        try {
+            $sp = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '$id'&`$select=displayName"
+            $first = @($sp)[0]
+        } catch [System.Exception] { $first = $null }
+        if ($first -and $first.displayName) { $Cache[$id] = $first.displayName; $names += $first.displayName }
+        else { $Cache[$id] = $id; $names += $id }
     }
-    
-    # Connecting to Microsoft Graph
-    Write-Log -Message "🔗 Connecting to Microsoft Graph..." -Level 'INFO'
-    if (($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint 
+    return $names
+}
+
+# Resolves named-location IDs via the preloaded map; unknown IDs pass through.
+function Resolve-NamedLocations {
+    param([string[]]$LocationIds, [hashtable]$LocationMap)
+    $names = @()
+    foreach ($id in $LocationIds) {
+        if ($id -eq 'All') { $names += 'All locations'; continue }
+        if ($id -eq 'AllTrusted') { $names += 'All trusted locations'; continue }
+        if ($id -eq '00000000-0000-0000-0000-000000000000') { $names += 'MFA Trusted IPs'; continue }
+        if ($LocationMap.ContainsKey($id)) { $names += $LocationMap[$id] } else { $names += $id }
     }
-    else
-    {
-        Connect-MgGraph -Scopes "User.Read.All", "AuditLog.read.All"  
+    return $names
+}
+
+# Joins a list for CSV cells; empty lists render as '-'.
+function Format-List { param([array]$Items); if (@($Items).Count -eq 0) { return '-' }; return ($Items -join '; ') }
+
+# ============================================================================
+# RETRIEVE - all CA policies with name/state filters.
+# ============================================================================
+
+Write-Log -Message "=== RETRIEVING CONDITIONAL ACCESS POLICIES ===" -Level 'INFO'
+try {
+    $allPolicies = Get-MgGraphAllPages -Uri 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies'
+} catch [System.Exception] {
+    Finish-Script -ExitCode 2 -Message "Failed to query CA policies: $($_.Exception.Message)" -Level 'ERROR'
+}
+$allPolicies = @($allPolicies)
+Write-Log -Message "$($allPolicies.Count) total policies found" -Level 'SUCCESS'
+
+if ($PolicyName) {
+    $allPolicies = @($allPolicies | Where-Object { $_.displayName -like "*$PolicyName*" })
+    Write-Log -Message "Filtered to $($allPolicies.Count) policies matching '$PolicyName'" -Level 'INFO'
+}
+if ($EnabledOnly) {
+    $allPolicies = @($allPolicies | Where-Object { $_.state -eq 'enabled' })
+    Write-Log -Message "Filtered to $($allPolicies.Count) enabled policies" -Level 'INFO'
+} elseif (-not $IncludeDisabled) {
+    $allPolicies = @($allPolicies | Where-Object { $_.state -ne 'disabled' })
+    Write-Log -Message "Showing $($allPolicies.Count) enabled/report-only policies (use -IncludeDisabled for all)" -Level 'INFO'
+}
+
+if ($allPolicies.Count -eq 0) {
+    Write-Log -Message "No policies found matching the specified criteria." -Level 'WARNING'
+    return
+}
+
+Write-Log -Message "Loading named locations..." -Level 'DEBUG'
+try {
+    $namedLocations = Get-MgGraphAllPages -Uri 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/namedLocations'
+} catch [System.Exception] { $namedLocations = @() }
+$namedLocations = @($namedLocations)
+$locationMap = @{}
+foreach ($nl in $namedLocations) {
+    if ($null -ne $nl -and $null -ne $nl.id) { $locationMap[$nl.id] = $nl.displayName }
+}
+Write-Log -Message "$($namedLocations.Count) named locations loaded" -Level 'DEBUG'
+
+# ============================================================================
+# PROCESS - expands each policy into one flat report row.
+# ============================================================================
+
+Write-Log -Message "=== PROCESSING POLICIES ===" -Level 'INFO'
+$report = [System.Collections.Generic.List[PSCustomObject]]::new()
+$nameCache = @{}
+$appCache = @{}
+$policyIndex = 0
+
+foreach ($policy in $allPolicies) {
+    $policyIndex++
+    Write-Progress -Activity 'Processing CA policies' -Status "$policyIndex of $($allPolicies.Count) - $($policy.displayName)" -PercentComplete (($policyIndex / [Math]::Max($allPolicies.Count, 1)) * 100)
+
+    $conditions = $policy.conditions
+    $grantControls = $policy.grantControls
+    $sessionControls = $policy.sessionControls
+
+    $includeUsers = @()
+    $excludeUsers = @()
+    if ($conditions.users) {
+        if ($conditions.users.includeUsers) { $includeUsers += $conditions.users.includeUsers }
+        if ($conditions.users.includeGroups) { $includeUsers += Resolve-DirectoryObjectNames -ObjectIds @($conditions.users.includeGroups) -Cache $nameCache }
+        if ($conditions.users.includeRoles) { $includeUsers += Resolve-DirectoryObjectNames -ObjectIds @($conditions.users.includeRoles) -Cache $nameCache }
+        if ($conditions.users.includeGuestsOrExternalUsers) { $includeUsers += 'Guests/External Users' }
+        if ($conditions.users.excludeUsers) { $excludeUsers += Resolve-DirectoryObjectNames -ObjectIds @($conditions.users.excludeUsers) -Cache $nameCache }
+        if ($conditions.users.excludeGroups) { $excludeUsers += Resolve-DirectoryObjectNames -ObjectIds @($conditions.users.excludeGroups) -Cache $nameCache }
+        if ($conditions.users.excludeRoles) { $excludeUsers += Resolve-DirectoryObjectNames -ObjectIds @($conditions.users.excludeRoles) -Cache $nameCache }
+    }
+
+    $includeApps = @()
+    $excludeApps = @()
+    if ($conditions.applications) {
+        if ($conditions.applications.includeApplications) { $includeApps = Resolve-AppNames -AppIds @($conditions.applications.includeApplications) -Cache $appCache }
+        if ($conditions.applications.excludeApplications) { $excludeApps = Resolve-AppNames -AppIds @($conditions.applications.excludeApplications) -Cache $appCache }
+        if ($conditions.applications.includeUserActions) {
+            $includeApps += @($conditions.applications.includeUserActions | ForEach-Object {
+                switch ($_) {
+                    'urn:user:registersecurityinfo' { 'Register security info' }
+                    'urn:user:registerdevice'       { 'Register or join devices' }
+                    default { $_ }
+                }
+            })
+        }
+    }
+
+    $platforms = '-'
+    if ($conditions.platforms) {
+        $incPlat = if ($conditions.platforms.includePlatforms) { $conditions.platforms.includePlatforms -join ', ' } else { '' }
+        $excPlat = if ($conditions.platforms.excludePlatforms) { " (excl: $($conditions.platforms.excludePlatforms -join ', '))" } else { '' }
+        $platforms = "$incPlat$excPlat"
+    }
+
+    $includeLocations = '-'
+    $excludeLocations = '-'
+    if ($conditions.locations) {
+        if ($conditions.locations.includeLocations) { $includeLocations = Format-List (Resolve-NamedLocations -LocationIds @($conditions.locations.includeLocations) -LocationMap $locationMap) }
+        if ($conditions.locations.excludeLocations) { $excludeLocations = Format-List (Resolve-NamedLocations -LocationIds @($conditions.locations.excludeLocations) -LocationMap $locationMap) }
+    }
+
+    $signInRisk = if ($conditions.signInRiskLevels -and @($conditions.signInRiskLevels).Count -gt 0) { $conditions.signInRiskLevels -join ', ' } else { '-' }
+    $userRisk = if ($conditions.userRiskLevels -and @($conditions.userRiskLevels).Count -gt 0) { $conditions.userRiskLevels -join ', ' } else { '-' }
+    $clientApps = if ($conditions.clientAppTypes -and @($conditions.clientAppTypes).Count -gt 0) { $conditions.clientAppTypes -join ', ' } else { '-' }
+
+    $deviceFilter = '-'
+    if ($conditions.devices -and $conditions.devices.deviceFilter) {
+        $deviceFilter = "$($conditions.devices.deviceFilter.mode) : $($conditions.devices.deviceFilter.rule)"
+    }
+
+    $grantOperator = if ($grantControls.operator) { $grantControls.operator } else { '-' }
+    $grants = @()
+    if ($grantControls.builtInControls) { $grants += @($grantControls.builtInControls) }
+    if ($grantControls.customAuthenticationFactors) { $grants += @($grantControls.customAuthenticationFactors) }
+    if ($grantControls.termsOfUse) { $grants += "ToU: $($grantControls.termsOfUse -join ', ')" }
+    if ($grantControls.authenticationStrength) { $grants += "Auth Strength: $($grantControls.authenticationStrength.displayName)" }
+    $grantText = if ($grants.Count -gt 0) { "($grantOperator) $($grants -join '; ')" } else { 'Block or not configured' }
+
+    $sessionParts = @()
+    if ($sessionControls.signInFrequency -and $sessionControls.signInFrequency.isEnabled) {
+        $freq = $sessionControls.signInFrequency
+        $sessionParts += "Sign-in freq: $($freq.value) $($freq.type)$(if ($freq.frequencyInterval) { " ($($freq.frequencyInterval))" })"
+    }
+    if ($sessionControls.persistentBrowser -and $sessionControls.persistentBrowser.isEnabled) { $sessionParts += "Persistent browser: $($sessionControls.persistentBrowser.mode)" }
+    if ($sessionControls.cloudAppSecurity -and $sessionControls.cloudAppSecurity.isEnabled) { $sessionParts += "Cloud App Security: $($sessionControls.cloudAppSecurity.cloudAppSecurityType)" }
+    if ($sessionControls.applicationEnforcedRestrictions -and $sessionControls.applicationEnforcedRestrictions.isEnabled) { $sessionParts += 'App-enforced restrictions' }
+    if ($sessionControls.continuousAccessEvaluation -and $sessionControls.continuousAccessEvaluation.mode) { $sessionParts += "CAE: $($sessionControls.continuousAccessEvaluation.mode)" }
+    $sessionText = if ($sessionParts.Count -gt 0) { $sessionParts -join '; ' } else { '-' }
+
+    $stateLabel = switch ($policy.state) {
+        'enabled'    { 'Enabled' }
+        'disabled'   { 'Disabled' }
+        'enabledForReportingButNotEnforced' { 'Report-Only' }
+        default      { $policy.state }
+    }
+    Write-Log -Message "[$stateLabel] $($policy.displayName)" -Level $(if ($stateLabel -eq 'Enabled') { 'SUCCESS' } elseif ($stateLabel -eq 'Disabled') { 'ERROR' } else { 'WARNING' })
+
+    $report.Add([PSCustomObject]@{
+        PolicyName       = $policy.displayName
+        State            = $stateLabel
+        CreatedDateTime  = $policy.createdDateTime
+        ModifiedDateTime = $policy.modifiedDateTime
+        IncludeUsers     = Format-List $includeUsers
+        ExcludeUsers     = Format-List $excludeUsers
+        IncludeApps      = Format-List $includeApps
+        ExcludeApps      = Format-List $excludeApps
+        Platforms        = $platforms
+        ClientAppTypes   = $clientApps
+        IncludeLocations = $includeLocations
+        ExcludeLocations = $excludeLocations
+        SignInRiskLevels = $signInRisk
+        UserRiskLevels   = $userRisk
+        DeviceFilter     = $deviceFilter
+        GrantControls    = $grantText
+        SessionControls  = $sessionText
+        PolicyId         = $policy.id
+    })
+}
+Write-Progress -Activity 'Processing CA policies' -Completed
+
+Write-Log -Message "=== CONDITIONAL ACCESS SUMMARY ===" -Level 'INFO'
+$stateGroups = @($report | Group-Object State | Sort-Object Name)
+foreach ($sg in $stateGroups) {
+    Write-Log -Message "$($sg.Name) : $($sg.Count)" -Level $(if ($sg.Name -eq 'Enabled') { 'SUCCESS' } elseif ($sg.Name -eq 'Disabled') { 'ERROR' } else { 'WARNING' })
+}
+
+#region --- Helpers ---
+
+# Grant controls breakdown
+Write-Log -Message "--- Grant Controls Used ---" -Level 'WARNING'
+$grantTypes = @{}
+foreach ($r in $report) {
+    $r.GrantControls -split ';' | ForEach-Object {
+        $g = $_.Trim()
+        if ($g -and $g -ne '-' -and $g -ne 'Block or not configured') {
+            if (-not $grantTypes.ContainsKey($g)) { $grantTypes[$g] = 0 }
+            $grantTypes[$g]++
+        }
+    }
+}
+foreach ($gt in ($grantTypes.GetEnumerator() | Sort-Object Value -Descending)) {
+    Write-Log -Message "$($gt.Key) : $($gt.Value) policy/policies" -Level 'INFO'
+}
+
+# Policies targeting All Users
+$allUserPolicies = $report | Where-Object { $_.IncludeUsers -match 'All Users' }
+if ($allUserPolicies.Count -gt 0) {
+    Write-Log -Message "--- Policies Targeting All Users ($($allUserPolicies.Count)) ---" -Level 'WARNING'
+    foreach ($au in $allUserPolicies) {
+        Write-Log -Message "[$($au.State)] $($au.PolicyName)" -Level 'INFO'
     }
 }
 
-Connect_MgGraph
-Write-Log -Message "📝 If you encounter module-related conflicts, run the script in a fresh PowerShell window." -Level 'WARNING'
-
-# Define the CSV export path in the script's directory
-$ExportCSV = Join-Path -Path $PSScriptRoot -ChildPath "InactiveM365UserReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd hh-mm-ss tt')).csv"
-$ExportResults = @()  
-
-# Retrieve inactive users
-Write-Log -Message "🔄 Retrieving inactive users from Microsoft 365..." -Level 'INFO'
-$RequiredProperties = @('UserPrincipalName', 'EmployeeId', 'DisplayName', 'CreatedDateTime', 'AccountEnabled', 'Department', 'JobTitle', 'RefreshTokensValidFromDateTime', 'SigninActivity')
-$Count = 0
-$PrintedUser = 0
-
-Get-MgBetaUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object {
-    $Count++
-    $UPN = $_.UserPrincipalName
-    Write-Progress -Activity "🔎 Processing user: $Count - $UPN"
-
-    # Extract user details
-    $LastInteractiveSignIn = $_.SignInActivity.LastSignInDateTime
-    $LastNon_InteractiveSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    
-    # Handle inactive days calculation
-    if ($LastInteractiveSignIn -eq $null) { $LastInteractiveSignIn = "Never Logged In"; $InactiveDays_InteractiveSignIn = "-" }
-    else { $InactiveDays_InteractiveSignIn = (New-TimeSpan -Start $LastInteractiveSignIn).Days }
-    
-    if ($LastNon_InteractiveSignIn -eq $null) { $LastNon_InteractiveSignIn = "Never Logged In"; $InactiveDays_NonInteractiveSignIn = "-" }
-    else { $InactiveDays_NonInteractiveSignIn = (New-TimeSpan -Start $LastNon_InteractiveSignIn).Days }
-    
-    $AccountStatus = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-
-    # Export to CSV and collect the same row for the HTML dashboard.
-    [PSCustomObject]@{
-        
-        'UPN' = $UPN; 'Creation Date' = $_.CreatedDateTime; 'Last Interactive SignIn Date' = $LastInteractiveSignIn;
-        'Last Non Interactive SignIn Date' = $LastNon_InteractiveSignIn; 'Inactive Days(Interactive SignIn)' = $InactiveDays_InteractiveSignIn;
-        'Inactive Days(Non-Interactive Signin)' = $InactiveDays_NonInteractiveSignIn; 'Account Status' = $AccountStatus;
-        'Department' = $_.Department; 'Employee ID' = $_.EmployeeId; 'Employee Name' = $_.DisplayName; 'Job Title' = $_.JobTitle
-    } | ForEach-Object { $ExportResults += $_; $_ } | Export-Csv -Path $ExportCSV -NoTypeInformation -Encoding UTF8 -Append
+# Policies targeting All Cloud Apps
+$allAppPolicies = $report | Where-Object { $_.IncludeApps -match 'All cloud apps' }
+if ($allAppPolicies.Count -gt 0) {
+    Write-Log -Message "--- Policies Targeting All Cloud Apps ($($allAppPolicies.Count)) ---" -Level 'WARNING'
+    foreach ($aa in $allAppPolicies) {
+        Write-Log -Message "[$($aa.State)] $($aa.PolicyName)" -Level 'INFO'
+    }
 }
 
-# Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
-$htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
-$htmlRows = @($ExportResults)
-$tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    $statusBadge = if ("$($rowRef.'Account Status')" -eq 'Disabled') { 'medium' } else { 'low' }
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UPN)") + '</code></td>' +
-    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Account Status')") + '</span></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Last Interactive SignIn Date')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Inactive Days(Interactive SignIn)')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Department)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Job Title')") + '</td></tr>'
+# Policies with no exclusions (potential lockout risk)
+$noExclusions = $report | Where-Object { $_.ExcludeUsers -eq '-' -and $_.State -eq 'Enabled' -and $_.IncludeUsers -match 'All Users' }
+if ($noExclusions.Count -gt 0) {
+    Write-Log -Message "--- WARNING: Enabled Policies with All Users and No Exclusions ---" -Level 'ERROR'
+    foreach ($ne in $noExclusions) {
+        Write-Log -Message "$($ne.PolicyName)" -Level 'ERROR'
+        Write-Log -Message "Grant: $($ne.GrantControls)" -Level 'DEBUG'
+    }
+    Write-Log -Message "These policies risk locking out break-glass accounts if misconfigured." -Level 'WARNING'
 }
-$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Inactive User Detail</div>' +
-    '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>UPN</th><th>Status</th><th>Last Interactive Sign-In</th><th>Inactive Days</th><th>Department</th><th>Job Title</th></tr></thead><tbody>' +
-    ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
 
-$disabledCount = @($htmlRows | Where-Object { $_."Account Status" -eq 'Disabled' }).Count
-$neverCount = @($htmlRows | Where-Object { $_."Last Interactive SignIn Date" -eq 'Never Logged In' }).Count
-$kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
-    @{ value = "$disabledCount"; label = 'Disabled users'; color = '#f1c21b' },
-    @{ value = "$neverCount"; label = 'Never logged in'; color = '#da1e28' }
-)
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 Inactive User Report' -Subtitle ("Users: $($htmlRows.Count) | Disabled: $disabledCount | Never logged in: $neverCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 Inactive User Report'
+# Report-only policies (might be forgotten)
+$reportOnly = $report | Where-Object { $_.State -eq 'Report-Only' }
+if ($reportOnly.Count -gt 0) {
+    Write-Log -Message "--- Report-Only Policies ($($reportOnly.Count)) ---" -Level 'WARNING'
+    Write-Log -Message "Review these to determine if they should be enabled:" -Level 'DEBUG'
+    foreach ($ro in $reportOnly) {
+        $age = if ($ro.CreatedDateTime) { [math]::Round(((Get-Date) - [datetime]$ro.CreatedDateTime).TotalDays) } else { '?' }
+        Write-Log -Message "$($ro.PolicyName) (created ${age}d ago)" -Level 'INFO'
+    }
+}
 
-# Final message
-Write-Log -Message "✅ Script executed successfully. Exported report has $($htmlRows.Count) user(s)." -Level 'SUCCESS'
-Write-Log -Message "📄 CSV:  $ExportCSV" -Level 'WARNING'
-Write-Log -Message "📄 HTML: $htmlPath" -Level 'WARNING'
-Invoke-Item "$ExportCSV"
+# Dual export: raw CSV plus Carbon Dark HTML dashboard (shared timestamp).
+if ($report.Count -gt 0) {
+    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    if ($ExportPath) {
+        $csvPath = $ExportPath
+    } else {
+        $csvPath = Join-Path $scriptDirectory "CAPolicy_Report_$stamp.csv"
+    }
+    $htmlPath = [System.IO.Path]::ChangeExtension($csvPath, '.html')
+    $report | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+
+    # Defensive re-collection: $report must survive for the HTML table (Rule 26).
+    $htmlRows = @($report)
+    if (-not $htmlRows) { $htmlRows = @() }
+    $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
+        $stateBadge = switch ("$($rowRef.State)") { 'Enabled' { 'low' } 'Report-Only' { 'medium' } 'Disabled' { 'critical' } default { 'low' } }
+        '<tr><td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.PolicyName)") + '</td>' +
+        '<td><span class="badge ' + $stateBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.State)") + '</span></td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.IncludeUsers)") + '</td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.IncludeApps)") + '</td>' +
+        '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.GrantControls)") + '</td></tr>'
+    }
+    $tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) policies; full data is in the CSV.</p>" } else { '' }
+    $tableHtml = '<div class="section-title">Policy Detail</div>' +
+        '<div class="card"><h2>All Policies (' + $htmlRows.Count + ')</h2>' +
+        '<table><thead><tr><th>Policy</th><th>State</th><th>Users</th><th>Apps</th><th>Grant Controls</th></tr></thead><tbody>' +
+        ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
+
+    $enabledCount = @($htmlRows | Where-Object { $_.State -eq 'Enabled' }).Count
+    $reportOnlyCount = @($htmlRows | Where-Object { $_.State -eq 'Report-Only' }).Count
+    $disabledCount = @($htmlRows | Where-Object { $_.State -eq 'Disabled' }).Count
+    $riskyCount = @($htmlRows | Where-Object { $_.ExcludeUsers -eq '-' -and $_.State -eq 'Enabled' -and $_.IncludeUsers -match 'All Users' }).Count
+    $kpis = @(
+        @{ value = "$($htmlRows.Count)"; label = 'Total policies'; color = '' },
+        @{ value = "$enabledCount"; label = 'Enabled'; color = '#24a148' },
+        @{ value = "$reportOnlyCount"; label = 'Report-only'; color = '#f1c21b' },
+        @{ value = "$disabledCount"; label = 'Disabled'; color = '' },
+        @{ value = "$riskyCount"; label = 'All-users, no exclusions'; color = '#da1e28' }
+    )
+    $tenantId = if ($mgContext) { $mgContext.TenantId } else { '' }
+    Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Entra CA Policy Report' -Subtitle ("Policies: $($htmlRows.Count) | Enabled: $enabledCount | Lockout-risk: $riskyCount") `
+        -Tenant $tenantId -Body $tableHtml -Kpis $kpis -Version '1.0.1' -ReportName 'Entra CA Policy Report'
+    Write-Log -Message "CSV:  $csvPath ($($report.Count) rows)" -Level 'INFO'
+    Write-Log -Message "HTML: $htmlPath" -Level 'INFO'
+}
+
+Write-Log -Message "`n$('='*60)" -Level 'DEBUG'
+#endregion
+
+# ============================================================================
+# GRAPH PAGINATION (embedded canonical Get-MgGraphAllPages v1.1.0, function only).
+# Follows @odata.nextLink with 429 backoff; uses Invoke-MgGraphRequest.
+# ============================================================================
+
+function Get-MgGraphAllPages {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+        [int]$DelayMs = 100,
+        [hashtable]$Headers = @{},
+        [int]$Max429Retries = 3
+    )
+
+    [System.Collections.Generic.List[PSCustomObject]]$allResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $nextLink = $Uri
+    $requestCount = 0
+    $consecutive429 = 0
+
+    do {
+        try {
+            if ($requestCount -gt 0 -and $DelayMs -gt 0) {
+                Start-Sleep -Milliseconds $DelayMs
+            }
+
+            $params = @{
+                Uri         = $nextLink
+                Method      = 'GET'
+                Headers     = $Headers
+                ErrorAction = 'Stop'
+            }
+
+            $response = Invoke-MgGraphRequest @params
+            $requestCount++
+            $consecutive429 = 0 # Reset throttle counter on success
+
+            if ($null -ne $response.value) {
+                foreach ($item in $response.value) {
+                    $allResults.Add($item)
+                }
+            }
+            else {
+                $allResults.Add($response)
+            }
+
+            $nextLink = $response.'@odata.nextLink'
+
+            if ($requestCount % 10 -eq 0) {
+                Write-Verbose "Processed $requestCount API pages, retrieved $($allResults.Count) items..."
+            }
+        }
+        catch {
+            $is429 = ($_.Exception.Message -like '*429*') -or ($_.Exception.Message -like '*throttled*')
+            if ($is429) {
+                $consecutive429++
+                if ($consecutive429 -gt $Max429Retries) {
+                    throw "Rate limit exceeded (HTTP 429). Maximum retries ($Max429Retries) reached for $nextLink"
+                }
+                # Honor Retry-After header if present, else exponential backoff capped at 60s
+                $retryAfter = $null
+                try {
+                    if ($_.Exception.Response -and $_.Exception.Response.Headers) {
+                        $retryAfter = $_.Exception.Response.Headers['Retry-After']
+                        if (-not $retryAfter) { $retryAfter = $_.Exception.Response.Headers['retry-after'] }
+                    }
+                } catch [System.Exception] {
+                    $retryAfter = $null
+                }
+                $delaySec = if ($retryAfter -and [int]::TryParse($retryAfter.ToString().Split(',')[0], [ref]$null)) { [int]$retryAfter.ToString().Split(',')[0] } else { [Math]::Min(60, [Math]::Pow(2, $consecutive429) * 5) }
+                Write-Warning "Rate limit hit (attempt $consecutive429/$Max429Retries), waiting $delaySec seconds..."
+                Start-Sleep -Seconds $delaySec
+                continue
+            }
+            throw "Error fetching data from $nextLink : $($_.Exception.Message)"
+        }
+    } while ($nextLink)
+
+    return $allResults
+}
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).
-# Six functions copied verbatim (Get-StandardHtmlHead/Open/Footer/Close/ChartScripts + Export-StandardHtmlReport);
-# file-level header omitted. IBM Carbon Dark is the only approved HTML design system.
 # ============================================================================
 
 # ============================================================================

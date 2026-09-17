@@ -1,45 +1,189 @@
-<#PSScriptInfo
- 
-.VERSION 0.2
- 
-.GUID c65d2f63-9958-427d-bf2c-0188c4739681
- 
-.AUTHOR Daniel Bradley
- 
-.COMPANYNAME Ourcloudnetwork.co.uk
- 
-.COPYRIGHT
- 
+<#
+.TITLE
+    Invoke-M365LicenseReport - License allocation and usage report for Microsoft 365
+
+.SYNOPSIS
+    Generates a license allocation and usage report for Microsoft 365.
+
+.DESCRIPTION
+    This script generates a license report for Microsoft 365. It connects to Microsoft Graph,
+    collects subscribed SKUs and user license assignments, computes used and unused license
+    counts per plan, and renders an HTML report plus console output.
+
 .TAGS
-    ourcloudnetwork
-    Microsoft 365
-    Microsoft Graph
- 
-.LICENSEURI
- 
-.PROJECTURI
- 
-.ICONURI
- 
-.EXTERNALMODULEDEPENDENCIES
-    Microsoft.Graph.Authentication
- 
-.RELEASENOTES
-    v0.1 - Initial release
-    v0.2 - Remove dependency on modules. Add more subscriptions to the promo/free filter
+    Identity,M365,Licensing
+
+.PLATFORM
+    Windows 10/11/Server 2019+
+
+.PERMISSIONS
+    User.Read.All, AuditLog.Read.All, Organization.Read.All, RoleManagement.Read.Directory
+
+.AUTHOR
+    AI Generated
+
+.VERSION
+    1.0.0
+
+.CHANGELOG
+    1.0.0 (2026-09-16) - Compliance hardening: canonical rich header, ErrorActionPreference Stop, alias and catch hygiene.
+
+.LASTUPDATE
+    2026-09-16
+
+.EXAMPLE
+    .\Invoke-M365LicenseReport.ps1 -outpath "C:\Reports"
+    Runs the license report and writes output to C:\Reports.
+
+.EXAMPLE
+    .\Invoke-M365LicenseReport.ps1 -outpath "D:\Audit\Licenses"
+    Runs the license report into a dedicated audit folder.
+
+.NOTES
+    Part of Microsoft365-Scripts toolkit - Identity,M365,Licensing
+    Exit codes: 0 = success, 1 = failure, 2 = script error
+    Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
 #>
 
-<#
-.DESCRIPTION
- This script generates a license report for Microsoft 365
-#> 
+#Requires -Version 5.1
 
 #Params
 param(
      [Parameter(Mandatory)]
      [ValidateNotNullOrEmpty()]
      [string]$outpath
- )
+  )
+
+$ErrorActionPreference = 'Stop'
+
+# ============================================================================
+# CONFIGURATION - solution identity for the embedded logging block.
+# ============================================================================
+
+$SolutionName = 'Invoke-M365LicenseReport'
+$ScriptMode   = 'run'
+
+# ============================================================================
+# LOGGING BLOCK (embedded canonical Write-Log - General CLI, ProgramData only)
+# Single source of truth: Initialize-Log / Write-Banner / Write-Log / Finish-Script.
+# ============================================================================
+
+$script:LogRoot  = $null
+$script:LogFile  = $null
+$script:LogReady = $false
+
+# Creates the ProgramData log folder/file and reports readiness (Type 3 general CLI).
+function Initialize-Log {
+    [CmdletBinding()]
+    param(
+        [string]$SolutionName = 'EnterpriseAdminTool',
+        [string]$ScriptMode = 'run',
+        [ValidateSet('General')]
+        [string]$Type = 'General'
+    )
+
+    try {
+        # General CLI logs to ProgramData only (Type 2 pair folder not used here).
+        $script:LogRoot = Join-Path $env:ProgramData "$SolutionName\Logs"
+        $script:LogFile = Join-Path $script:LogRoot "$SolutionName`_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+
+        if (-not (Test-Path -LiteralPath $script:LogRoot)) {
+            $null = [System.IO.Directory]::CreateDirectory($script:LogRoot)
+        }
+        if (-not (Test-Path -LiteralPath $script:LogFile)) {
+            $null = [System.IO.File]::Create($script:LogFile).Dispose()
+        }
+
+        $script:LogReady = $true
+        return $true
+    }
+    catch {
+        Write-Host "Log initialization failed: $($_.Exception.Message)" -ForegroundColor Red
+        $script:LogReady = $false
+        return $false
+    }
+}
+
+# Writes the solution banner to console and log file.
+function Write-Banner {
+    [CmdletBinding()]
+    [Alias('Show-Banner')]
+    param()
+
+    $title      = '{0} | {1} | {2}' -f $SolutionName, $ScriptMode, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    $bannerLine = '=' * 78
+    $lines      = @('', $bannerLine, $title, $bannerLine)
+
+    foreach ($line in $lines) {
+        if ($line -eq $title) {
+            Write-Host $line -ForegroundColor White
+        } else {
+            Write-Host $line -ForegroundColor DarkGray
+        }
+
+        if ($script:LogReady -and $script:LogFile) {
+            Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue -WhatIf:$false
+        }
+    }
+}
+
+# Writes one timestamped, level-colored line to console and log file.
+function Write-Log {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowEmptyString()]
+        [string]$Message = "",
+        [ValidateSet("INFO", "SUCCESS", "WARNING", "ERROR", "DEBUG")]
+        [string]$Level = "INFO"
+    )
+
+    if ([string]::IsNullOrEmpty($Message)) { return }
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    # Console = clean, no timestamp/level prefix - color alone conveys severity.
+    # File    = detailed - keeps [timestamp] [LEVEL] for fleet troubleshooting.
+    $fileLine  = "[$timestamp] [$Level] $Message"
+
+    $color = switch ($Level) {
+        "DEBUG"   { "DarkGray" }
+        "INFO"    { "Cyan" }
+        "SUCCESS" { "Green" }
+        "WARNING" { "Yellow" }
+        "ERROR"   { "Red" }
+    }
+    Write-Host $Message -ForegroundColor $color
+
+    if ($script:LogReady -and $script:LogFile) {
+        Add-Content -LiteralPath $script:LogFile -Value $fileLine -Encoding UTF8 -ErrorAction SilentlyContinue -WhatIf:$false
+    }
+}
+
+# Logs the final message and terminates with the given exit code.
+function Finish-Script {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$ExitCode,
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+        [ValidateSet("INFO", "SUCCESS", "WARNING", "ERROR", "DEBUG")]
+        [string]$Level = "INFO",
+        [switch]$NoExit
+    )
+
+    Write-Log -Message $Message -Level $Level
+    if (-not $NoExit) {
+        exit $ExitCode
+    }
+}
+
+$null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type 'General'
+Write-Banner
+
+# ============================================================================
+# GRAPH CONNECTION - reuses a sufficiently-scoped session, else reconnects.
+# ============================================================================
 
 # Check Microsoft Graph connection
 $state = Get-MgContext
@@ -64,25 +208,29 @@ if ($state) {
     
     if ($missingPerms.Count -eq 0) {
         $hasAllPerms = $true
-        Write-Host "Connected to Microsoft Graph with all required permissions" -ForegroundColor Green
+        Write-Log -Message "Connected to Microsoft Graph with all required permissions" -Level 'SUCCESS'
     } else {
-        Write-Host "Missing required permissions: $($missingPerms -join ', ')" -ForegroundColor Yellow
-        Write-Host "Reconnecting with all required permissions..." -ForegroundColor Yellow
+        Write-Log -Message "Missing required permissions: $($missingPerms -join ', ')" -Level 'WARNING'
+        Write-Log -Message "Reconnecting with all required permissions..." -Level 'WARNING'
     }
 } else {
-    Write-Host "Not connected to Microsoft Graph. Connecting now..." -ForegroundColor Yellow
+    Write-Log -Message "Not connected to Microsoft Graph. Connecting now..." -Level 'WARNING'
 }
 
 # Connect if we need to
 if (-not $hasAllPerms) {
     try {
         Connect-MgGraph -Scopes $requiredPerms -ErrorAction Stop -NoWelcome
-        Write-Host "Successfully connected to Microsoft Graph" -ForegroundColor Green
+        Write-Log -Message "Successfully connected to Microsoft Graph" -Level 'SUCCESS'
     } catch {
         Write-Error "Failed to connect to Microsoft Graph: $_"
         exit
     }
 }
+
+# ============================================================================
+# COLLECTION - org profile, SKU translation table, then all users (paged).
+# ============================================================================
 
 # Get organization information
 $orgname = Invoke-MgGraphRequest -Uri "beta/organization" -OutputType PSObject | Select-Object -ExpandProperty Value | Select-Object -ExpandProperty DisplayName
@@ -236,629 +384,810 @@ $overLicensedPrivUsersCount = $overLicensedPrivUsers.Count
 $totalLicensedUsersCount = $AllLicensedUsers.Count
 
 # Generate HTML report
-$html = @"
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Microsoft 365 License Usage Report</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #f5f5f5;
-        }
-        .header-container {
-            background: linear-gradient(135deg, #0078D4 0%, #106EBE 100%);
-            color: white;
-            padding: 25px 40px;
-            margin-bottom: 30px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        }
-        .header-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        h1 {
-            font-size: 28px;
-            font-weight: 600;
-            margin: 0;
-            letter-spacing: -0.5px;
-        }
-        .header-subtitle {
-            font-size: 14px;
-            font-weight: 400;
-            margin-top: 0px;
-            margin-bottom: 10px;
-            opacity: 0.9;
-        }
-        .author-info {
-            margin-top: 12px;
-            border-top: 1px solid rgba(255, 255, 255, 0.3);
-            padding-top: 10px;
-            display: flex;
-            align-items: center;
-            font-size: 13px;
-        }
-        .author-label {
-            opacity: 0.8;
-            margin-right: 6px;
-        }
-        .author-links {
-            display: flex;
-            align-items: center;
-        }
-        .author-link {
-            color: white;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            border: 1px solid rgba(255, 255, 255, 0.5);
-            padding: 4px 10px;
-            border-radius: 4px;
-            margin-right: 10px;
-            transition: all 0.2s ease;
-            background-color: rgba(255, 255, 255, 0.1);
-        }
-        .author-link:hover {
-            background-color: rgba(255, 255, 255, 0.2);
-            border-color: rgba(255, 255, 255, 0.7);
-        }
-        .author-link svg {
-            margin-right: 5px;
-        }
-        .report-info {
-            text-align: right;
-            font-size: 14px;
-        }
-        .report-date {
-            font-weight: 500;
-            margin-top: 5px;
-        }
-        .content-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 40px 40px;
-        }
-        .summary-cards {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            margin-bottom: 40px;
-            gap: 20px;
-        }
-        .summary-card {
-            background-color: white;
-            border-radius: 8px;
-            padding: 20px;
-            width: calc(33.333% - 14px);
-            box-sizing: border-box;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            text-align: center;
-        }
-        @media (max-width: 768px) {
-            .summary-card {
-                width: 100%;
-                margin-bottom: 15px;
-            }
-        }
-        .card-title {
-            font-size: 14px;
-            color: #666;
-            text-transform: uppercase;
-            margin: 0 0 10px 0;
-        }
-        .card-value {
-            font-size: 36px;
-            font-weight: bold;
-            margin: 0;
-            color: #333;
-        }
-        .card-percentage {
-            font-size: 14px;
-            color: #666;
-            margin-top: 5px;
-        }
-        table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            margin-top: 20px;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
-            background-color: white;
-        }
-        th, td {
-            padding: 15px;
-            text-align: left;
-        }
-        th {
-            background-color: #B5D8EB;
-            color: #333;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 2px solid #ddd;
-        }
-        tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        tr:hover {
-            background-color: #f1f1f1;
-        }
-        td {
-            border-bottom: 1px solid #ddd;
-        }
-        tr:last-child td {
-            border-bottom: none;
-        }
-        .footer {
-            text-align: center;
-            margin-top: 30px;
-            font-size: 12px;
-            color: #666;
-        }
-        .high-unused {
-            background-color: #ffe0e0 !important;
-        }
-        tr.high-unused:nth-child(even) {
-            background-color: #ffdddd !important;
-        }
-        .export-btn {
-            display: inline-block;
-            padding: 10px 20px;
-            background-color: #0078D4;
-            color: white;
-            text-decoration: none;
-            border-radius: 4px;
-            margin-top: 20px;
-            font-weight: 500;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        }
-        .export-btn:hover {
-            background-color: #106EBE;
-        }
-        .switch {
-            position: relative;
-            display: inline-block;
-            width: 60px;
-            height: 34px;
-            margin-right: 10px;
-        }
-        .switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-        .slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #ccc;
-            transition: .4s;
-            border-radius: 34px;
-        }
-        .slider:before {
-            position: absolute;
-            content: "";
-            height: 26px;
-            width: 26px;
-            left: 4px;
-            bottom: 4px;
-            background-color: white;
-            transition: .4s;
-            border-radius: 50%;
-        }
-        input:checked + .slider {
-            background-color: #0078D4;
-        }
-        input:checked + .slider:before {
-            transform: translateX(26px);
-        }
-        .filter-container {
-            display: flex;
-            align-items: center;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-        }
-        .filter-label {
-            margin-left: 10px;
-            font-weight: 500;
-        }
-        .filter-group {
-            display: flex;
-            align-items: center;
-            margin-right: 30px;
-            margin-bottom: 10px;
-        }
-    </style>
-</head>
-<body>
-    <div class="header-container">
-        <div class="header-content">
-            <div>
-                <h1>Microsoft 365 License Usage Report</h1>
-                <div class="header-subtitle">Overview of license allocation and usage across your tenant</div>
-                <div class="author-info">
-                    <span class="author-label">Created by:</span>
-                    <div class="author-links">
-                        <a href="https://www.linkedin.com/in/danielbradley2/" class="author-link" target="_blank">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="white">
-                                <path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/>
-                            </svg>
-                            Daniel Bradley
-                        </a>
-                        <a href="https://ourcloudnetwork.com" class="author-link" target="_blank">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="white">
-                                <path d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/>
-                            </svg>
-                            ourcloudnetwork.com
-                        </a>
-                    </div>
-                </div>
-            </div>
-            <div class="report-info">
-                <div class="report-date">Generated: $(Get-Date -Format "MMMM d, yyyy")</div>
-                <div class="tenant">Org: $orgname</div>
-            </div>
-        </div>
-    </div>
-     
-    <div class="content-container">
-        <div class="summary-cards">
-            <div class="summary-card">
-                <h3 class="card-title">Total Licenses</h3>
-                <p class="card-value" id="totalLicensesValue">$totalLicenses</p>
-                <p class="card-percentage" id="totalSubscriptions">Across $($report.Count) subscriptions</p>
-            </div>
-            <div class="summary-card">
-                <h3 class="card-title">Used Licenses</h3>
-                <p class="card-value" id="usedLicensesValue">$totalUsed</p>
-                <p class="card-percentage" id="usedPercentage">$([math]::Round(($totalUsed / $totalLicenses) * 100, 2))% of total</p>
-            </div>
-            <div class="summary-card">
-                <h3 class="card-title">Unused Licenses</h3>
-                <p class="card-value" id="unusedLicensesValue">$totalUnused</p>
-                <p class="card-percentage" id="unusedPercentage">$unusedPercentage% of total</p>
-            </div>
-            <div class="summary-card">
-                <h3 class="card-title">Licensed Users</h3>
-                <p class="card-value">$totalLicensedUsersCount</p>
-                <p class="card-percentage">Users with assigned licenses</p>
-            </div>
-            <div class="summary-card">
-                <h3 class="card-title">Inactive Users</h3>
-                <p class="card-value">$inactiveUsersCount</p>
-                <p class="card-percentage">90+ days without sign-in & licensed</p>
-            </div>
-            <div class="summary-card">
-                <h3 class="card-title">Over-licensed Admins</h3>
-                <p class="card-value">$overLicensedPrivUsersCount</p>
-                <p class="card-percentage">Privileged users with unnecessary licenses</p>
-            </div>
-        </div>
-         
-        <div class="filter-container">
-            <div class="filter-group">
-                <label class="switch">
-                    <input type="checkbox" id="toggleUnused" onchange="applyFilters()">
-                    <span class="slider"></span>
-                </label>
-                <span class="filter-label">Show only subscriptions with unused licenses</span>
-            </div>
-             
-            <div class="filter-group">
-                <label class="switch">
-                    <input type="checkbox" id="toggleHideFree" onchange="applyFilters()">
-                    <span class="slider"></span>
-                </label>
-                <span class="filter-label">Hide free/promotional licenses</span>
-            </div>
-             
-            <div class="filter-group">
-                <label class="switch">
-                    <input type="checkbox" id="toggleHideTrial" onchange="applyFilters()">
-                    <span class="slider"></span>
-                </label>
-                <span class="filter-label">Hide trial licenses</span>
-            </div>
-        </div>
-         
-        <h2>License Details</h2>
-        <table>
-            <thead>
-                <tr>
-"@
+# Dual export: raw CSVs plus Carbon Dark HTML dashboard (shared run, no re-query).
+$csvSkuPath = "$outpath\M365_License_Usage_SKUs.csv"
+$csvInactivePath = "$outpath\M365_License_Usage_InactiveLicensed.csv"
+$csvPrivPath = "$outpath\M365_License_Usage_OverLicensedPriv.csv"
+$report | Export-Csv -Path $csvSkuPath -NoTypeInformation -Encoding UTF8
+$licensedInactiveUsersReport | Export-Csv -Path $csvInactivePath -NoTypeInformation -Encoding UTF8
+$overLicensedPrivUsers | Export-Csv -Path $csvPrivPath -NoTypeInformation -Encoding UTF8
+Write-Log -Message "CSV: $csvSkuPath" -Level 'INFO'
+Write-Log -Message "CSV: $csvInactivePath" -Level 'INFO'
+Write-Log -Message "CSV: $csvPrivPath" -Level 'INFO'
 
-# Add table headers
-foreach ($header in $report[0].PSObject.Properties.Name) {
-    $html += " <th>$header</th>`n"
+# Defensive re-collection: report lists must survive for the HTML tables (Rule 26).
+$skuRows = @($report)
+$inactiveRows = @($licensedInactiveUsersReport)
+$privRows = @($overLicensedPrivUsers)
+
+$skuTableRows = foreach ($rowRef in ($skuRows | Select-Object -First 200)) {
+    '<tr><td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'License SKU')") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Type)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Total Licenses')") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Used Licenses')") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Unused licenses')") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Renewal/Expiratrion Date')") + '</td></tr>'
 }
-
-$html += @"
-                </tr>
-            </thead>
-            <tbody>
-"@
-
-# Add table rows with highlighting for rows with unused licenses
-foreach ($row in $report) {
-    # Only highlight rows where "Unused licenses" is greater than 0
-    $rowClass = if ($row."Unused licenses" -gt 0) { 
-        ' class="high-unused"' 
-    } else { 
-        '' 
-    }
-    
-    $html += " <tr$rowClass>`n"
-    foreach ($header in $row.PSObject.Properties.Name) {
-        $value = $row.$header
-        # Format date if it's a DateTime object
-        if ($header -eq "Renewal/Expiratrion Date" -and $value -is [DateTime]) {
-            $value = $value.ToString("yyyy-MM-dd")
-        }
-        $html += " <td>$value</td>`n"
-    }
-    $html += " </tr>`n"
+$inactiveTableRows = foreach ($rowRef in ($inactiveRows | Select-Object -First 200)) {
+    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Name)") + '</code></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Licenses)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.AccountEnabled)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.lastSuccessfulSignIn)") + '</td></tr>'
 }
-
-$html += @"
-            </tbody>
-        </table>
-         
-        <h2 style="margin-top: 40px;">Inactive Licensed Users</h2>
-        <p>The following users have licenses assigned but haven't successfully signed in for 90+ days.</p>
-         
-        <table>
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Licenses</th>
-                    <th>Account Enabled</th>
-                    <th>Last Sign-In Attempt</th>
-                    <th>Last Successful Sign-In</th>
-                </tr>
-            </thead>
-            <tbody>
-"@
-
-# Add rows for inactive licensed users
-foreach ($user in $licensedInactiveUsersReport) {
-    $html += @"
-                <tr>
-                    <td>$($user.Name)</td>
-                    <td style="white-space: pre-line;">$($user.Licenses)</td>
-                    <td>$($user.AccountEnabled)</td>
-                    <td>$($user.lastSignInAttempt)</td>
-                    <td>$($user.lastSuccessfulSignIn)</td>
-                </tr>
-"@
+$privTableRows = foreach ($rowRef in ($privRows | Select-Object -First 200)) {
+    '<tr><td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.DisplayName)") + '</td>' +
+    '<td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UserPrincipalName)") + '</code></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.License)") + '</td></tr>'
 }
+$bodyHtml = '<div class="section-title">Subscription Usage</div>' +
+    '<div class="card"><h2>Plans (' + $skuRows.Count + ')</h2>' +
+    '<table><thead><tr><th>License SKU</th><th>Type</th><th>Total</th><th>Used</th><th>Unused</th><th>Renewal Date</th></tr></thead><tbody>' +
+    ($skuTableRows -join "`n") + '</tbody></table></div>' +
+    '<div class="section-title">Licensed but Inactive (90 days)</div>' +
+    '<div class="card"><h2>Inactive Users (' + $inactiveRows.Count + ')</h2>' +
+    '<table><thead><tr><th>User</th><th>Licenses</th><th>Enabled</th><th>Last Successful Sign-In</th></tr></thead><tbody>' +
+    ($inactiveTableRows -join "`n") + '</tbody></table></div>' +
+    '<div class="section-title">Over-Licensed Privileged Users</div>' +
+    '<div class="card"><h2>Privileged Users (' + $privRows.Count + ')</h2>' +
+    '<table><thead><tr><th>Display Name</th><th>UPN</th><th>Licenses</th></tr></thead><tbody>' +
+    ($privTableRows -join "`n") + '</tbody></table></div>'
 
-$html += @"
-            </tbody>
-        </table>
-         
-        <h2 style="margin-top: 40px;">Over-Licensed Privileged Users</h2>
-        <p>The following users have administrative roles but may have unnecessary licenses assigned.</p>
-         
-        <table>
-            <thead>
-                <tr>
-                    <th>Display Name</th>
-                    <th>User Principal Name</th>
-                    <th>Licenses</th>
-                </tr>
-            </thead>
-            <tbody>
-"@
-
-# Add rows for over-licensed privileged users
-foreach ($user in $overLicensedPrivUsers) {
-    $html += @"
-                <tr>
-                    <td>$($user.DisplayName)</td>
-                    <td>$($user.UserPrincipalName)</td>
-                    <td style="white-space: pre-line;">$($user.License)</td>
-                </tr>
-"@
-}
-
-$html += @"
-            </tbody>
-        </table>
-         
-        <div class="footer">
-            <p>License usage report generated via Microsoft Graph API. Subscriptions with unused licenses are highlighted in red.</p>
-        </div>
-    </div>
-     
-    <script>
-        // Wait for document to be fully loaded
-        document.addEventListener('DOMContentLoaded', function() {
-            // Attach event handlers
-            document.getElementById('toggleUnused').onclick = function() { filterData(); };
-            document.getElementById('toggleHideFree').onclick = function() { filterData(); };
-            document.getElementById('toggleHideTrial').onclick = function() { filterData(); };
-        });
- 
-        // The main filter function
-        function filterData() {
-            console.log('Filtering data...');
-             
-            // Get filter states
-            let showOnlyUnused = document.getElementById('toggleUnused').checked;
-            let hideFree = document.getElementById('toggleHideFree').checked;
-            let hideTrial = document.getElementById('toggleHideTrial').checked;
-             
-            // Free licenses to filter
-            let freeLicenses = [
-                'windows store for business',
-                'microsoft power automate free',
-                'power virtual agents viral trial',
-                'rights management adhoc',
-                'power pages vtrial for makers',
-                'microsoft power apps for developer'
-            ];
-             
-            // Get the table and all data rows
-            let table = document.getElementsByTagName('table')[0];
-            if (!table) {
-                console.error('Table not found!');
-                return;
-            }
-             
-            let tbody = table.getElementsByTagName('tbody')[0];
-            if (!tbody) {
-                console.error('Table body not found!');
-                return;
-            }
-             
-            let rows = tbody.getElementsByTagName('tr');
-            if (rows.length === 0) {
-                console.error('No rows found in table!');
-                return;
-            }
-             
-            // Tracking totals
-            let totalSum = 0;
-            let usedSum = 0;
-            let unusedSum = 0;
-            let visibleCount = 0;
-             
-            // Process each row
-            for (let i = 0; i < rows.length; i++) {
-                let row = rows[i];
-                let cells = row.getElementsByTagName('td');
-                 
-                // Skip if we don't have enough cells
-                if (cells.length < 5) continue;
-                 
-                // Extract data from cells
-                let licenseName = cells[0].textContent.trim().toLowerCase();
-                let licenseType = cells[1].textContent.trim().toLowerCase();
-                let totalLicenses = parseInt(cells[2].textContent) || 0;
-                let usedLicenses = parseInt(cells[3].textContent) || 0;
-                let unusedLicenses = parseInt(cells[4].textContent) || 0;
-                 
-                // Apply filters
-                let showRow = true;
-                 
-                // Filter: Only show rows with unused licenses
-                if (showOnlyUnused && unusedLicenses <= 0) {
-                    showRow = false;
-                }
-                 
-                // Filter: Hide free licenses
-                if (hideFree) {
-                    for (let j = 0; j < freeLicenses.length; j++) {
-                        if (licenseName.includes(freeLicenses[j])) {
-                            showRow = false;
-                            break;
-                        }
-                    }
-                }
-                 
-                // Filter: Hide trial licenses
-                if (hideTrial && licenseType === 'trial') {
-                    showRow = false;
-                }
-                 
-                // Apply visibility
-                row.style.display = showRow ? '' : 'none';
-                 
-                // Add to totals if row is visible
-                if (showRow) {
-                    totalSum += totalLicenses;
-                    usedSum += usedLicenses;
-                    unusedSum += unusedLicenses;
-                    visibleCount++;
-                }
-            }
-             
-            // Update summary cards
-            let totalLicensesValue = document.getElementById('totalLicensesValue');
-            let totalSubscriptions = document.getElementById('totalSubscriptions');
-            let usedLicensesValue = document.getElementById('usedLicensesValue');
-            let usedPercentageElem = document.getElementById('usedPercentage');
-            let unusedLicensesValue = document.getElementById('unusedLicensesValue');
-            let unusedPercentageElem = document.getElementById('unusedPercentage');
-             
-            if (totalLicensesValue) totalLicensesValue.textContent = totalSum;
-            if (totalSubscriptions) totalSubscriptions.textContent = 'Across ' + visibleCount + ' subscriptions';
-             
-            if (usedLicensesValue) usedLicensesValue.textContent = usedSum;
-            let usedPercent = totalSum > 0 ? Math.round((usedSum / totalSum) * 100) : 0;
-            if (usedPercentageElem) usedPercentageElem.textContent = usedPercent + '% of total';
-             
-            if (unusedLicensesValue) unusedLicensesValue.textContent = unusedSum;
-            let unusedPercent = totalSum > 0 ? Math.round((unusedSum / totalSum) * 100) : 0;
-            if (unusedPercentageElem) unusedPercentageElem.textContent = unusedPercent + '% of total';
-             
-            console.log('Filtering complete. Visible rows:', visibleCount);
-        }
-         
-        // Define legacy functions to maintain backward compatibility
-        function applyFilters() {
-            filterData();
-        }
- 
-        function filterUnusedLicenses() {
-            filterData();
-        }
-         
-        function exportToCSV() {
-            // Headers for the CSV
-            const headers = [
-                $(foreach($header in $report[0].PSObject.Properties.Name) { "'$header'," })
-            ];
-             
-            // Data rows
-            const rows = [
-                headers.join(','),
-                $(foreach($row in $report) {
-                    $rowData = foreach($header in $row.PSObject.Properties.Name) {
-                        if ($header -eq "Renewal/Expiratrion Date" -and $row.$header -is [DateTime]) {
-                            "'$($row.$header.ToString("yyyy-MM-dd"))',"
-                        } else {
-                            "'$($row.$header)',"
-                        }
-                    }
-                    "`n `"$($rowData -join ',')`","
-                })
-            ];
-             
-            // Create the CSV content
-            const csvContent = "data:text/csv;charset=utf-8," + rows.join('\\r\\n');
-             
-            // Create a download link
-            const encodedUri = encodeURI(csvContent);
-            const link = document.createElement("a");
-            link.setAttribute("href", encodedUri);
-            link.setAttribute("download", "license_usage_report_$(Get-Date -Format "yyyy-MM-dd").csv");
-            document.body.appendChild(link);
-             
-            // Trigger download
-            link.click();
-             
-            document.body.removeChild(link);
-        }
-    </script>
-</body>
-</html>
-"@
+$kpis = @(
+    @{ value = "$totalLicenses"; label = 'Total licenses'; color = '' },
+    @{ value = "$totalUsed"; label = 'Used licenses'; color = '#24a148' },
+    @{ value = "$totalUnused ($unusedPercentage%)"; label = 'Unused licenses'; color = '#da1e28' },
+    @{ value = "$inactiveUsersCount"; label = 'Inactive licensed users'; color = '#f1c21b' },
+    @{ value = "$overLicensedPrivUsersCount"; label = 'Over-licensed priv users'; color = '#8a3ffc' }
+)
+Export-StandardHtmlReport -OutputPath "$outpath\M365_License_Usage_Report.html" -Title 'M365 License Usage Report' -Subtitle ("Licenses: $totalLicenses | Used: $totalUsed | Unused: $totalUnused ($unusedPercentage%)") `
+    -Body $bodyHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 License Usage Report'
 
 # Output the HTML to a file
 $outputPathFile = "$outpath\M365_License_Usage_Report.html"
-$html | Out-File -FilePath $outputPathFile -Encoding utf8
+Write-Log -Message "CSV:  $csvSkuPath" -Level 'SUCCESS'
+Write-Log -Message "HTML: $outputPathFile" -Level 'SUCCESS'
 
-Write-Host "HTML report generated at $outputPathFile" -ForegroundColor Green
+# ============================================================================
+# HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).
+# ============================================================================
+
+# ============================================================================
+# Get-StandardHtmlHead - emits <head> with Carbon design tokens + base styles.
+# ============================================================================
+function Get-StandardHtmlHead {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter()][string]$Subtitle = ''
+    )
+
+    return @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$Title $Subtitle</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+:root {
+    --cds-background: #161616;
+    --cds-layer-01: #262626;
+    --cds-layer-02: #353535;
+    --cds-border-strong-01: #4d4d4d;
+    --cds-border-subtle-01: #393939;
+    --cds-text-primary: #f4f4f4;
+    --cds-text-secondary: #c6c6c6;
+    --cds-text-helper: #8d8d8d;
+    --cds-link: #78a9ff;
+    --cds-blue: #0f62fe;
+    --cds-purple: #8a3ffc;
+    --cds-magenta: #d02670;
+    --cds-support-success: #24a148;
+    --cds-support-warning: #f1c21b;
+    --cds-support-error: #da1e28;
+    --cds-support-info: #0043ce;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: var(--cds-background);
+    color: var(--cds-text-primary);
+    line-height: 1.4;
+    padding: 32px;
+    -webkit-font-smoothing: antialiased;
+}
+
+.header {
+    margin-bottom: 40px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--cds-border-strong-01);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.header-left h1 {
+    font-size: 28px;
+    font-weight: 300;
+    letter-spacing: 0.5px;
+    color: var(--cds-text-primary);
+    margin-bottom: 4px;
+}
+
+.header-left h1 strong { font-weight: 600; }
+
+.header .subtitle {
+    color: var(--cds-text-secondary);
+    font-size: 14px;
+    font-family: 'IBM Plex Mono', monospace;
+}
+
+.header-right {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--cds-text-helper);
+    text-align: right;
+}
+
+.kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 2px;
+    background-color: var(--cds-border-subtle-01);
+    border: 1px solid var(--cds-border-subtle-01);
+    margin-bottom: 40px;
+}
+
+.kpi-card {
+    background-color: var(--cds-layer-01);
+    padding: 20px;
+    display: flex;
+    flex-direction: column-reverse;
+    justify-content: space-between;
+    min-height: 120px;
+    transition: background-color 0.15s ease;
+}
+
+.kpi-card:hover { background-color: var(--cds-layer-02); }
+
+.kpi-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 38px;
+    font-weight: 400;
+    line-height: 1.1;
+    color: var(--cds-text-primary);
+}
+
+.kpi-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--cds-text-secondary);
+    letter-spacing: 0.2px;
+    margin-bottom: 12px;
+}
+
+.section-title {
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--cds-text-secondary);
+    margin: 40px 0 16px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--cds-border-subtle-01);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+    gap: 24px;
+    margin-bottom: 24px;
+}
+
+.card {
+    background-color: var(--cds-layer-01);
+    border: 1px solid var(--cds-border-subtle-01);
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+}
+
+.card h2 {
+    font-size: 16px;
+    font-weight: 400;
+    margin-bottom: 24px;
+    color: var(--cds-text-primary);
+    border-left: 3px solid var(--cds-blue);
+    padding-left: 12px;
+}
+
+.legend { list-style: none; flex: 1; min-width: 180px; }
+.legend li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    font-size: 13px;
+    border-bottom: 1px solid var(--cds-border-subtle-01);
+}
+.legend li:last-child { border-bottom: none; }
+.legend .dot { width: 8px; height: 8px; flex-shrink: 0; }
+.legend .count {
+    margin-left: auto;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 500;
+}
+
+.bar-chart { display: flex; flex-direction: column; gap: 12px; }
+.bar-row { display: flex; align-items: center; gap: 16px; font-size: 13px; }
+.bar-label {
+    min-width: 140px;
+    text-align: right;
+    color: var(--cds-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.bar-track { flex: 1; height: 20px; background-color: var(--cds-border-subtle-01); position: relative; }
+.bar-fill {
+    height: 100%;
+    transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    color: #ffffff;
+    min-width: 24px;
+}
+
+/* Donut chart layout (used by Get-StandardHtmlChartScripts) */
+.donut-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+
+.donut-wrap {
+    position: relative;
+    width: 160px;
+    height: 160px;
+}
+
+.donut-center {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+}
+
+.donut-center .grade {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 36px;
+    font-weight: 500;
+    line-height: 1;
+}
+
+.donut-center .rate {
+    font-size: 11px;
+    color: var(--cds-text-helper);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+thead th {
+    text-align: left;
+    padding: 12px 16px;
+    background-color: var(--cds-layer-02);
+    border-bottom: 1px solid var(--cds-border-strong-01);
+    color: var(--cds-text-primary);
+    font-weight: 500;
+    font-size: 12px;
+}
+
+tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--cds-border-subtle-01);
+    color: var(--cds-text-secondary);
+}
+
+tbody tr {
+    background-color: var(--cds-layer-01);
+    transition: background-color 0.1s ease;
+}
+
+tbody tr:hover { background-color: var(--cds-layer-02); }
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.badge.critical { background-color: rgba(218, 30, 40, 0.15); color: #ff8389; border-left: 3px solid var(--cds-support-error); }
+.badge.high     { background-color: rgba(219, 109, 40, 0.15); color: #ffb38a; border-left: 3px solid #db6d28; }
+.badge.medium   { background-color: rgba(241, 194, 27, 0.15); color: #f1c21b; border-left: 3px solid var(--cds-support-warning); }
+.badge.low      { background-color: rgba(36, 161, 72, 0.15); color: #8ee0a5; border-left: 3px solid var(--cds-support-success); }
+.badge.info     { background-color: rgba(15, 98, 254, 0.15); color: #78a9ff; border-left: 3px solid var(--cds-support-info); }
+
+.progress-bar {
+    display: inline-block;
+    width: 100px;
+    height: 8px;
+    background-color: var(--cds-border-subtle-01);
+    vertical-align: middle;
+}
+.progress-fill { height: 100%; transition: width 0.5s ease; }
+.progress-fill.low      { background-color: var(--cds-support-success); }
+.progress-fill.medium   { background-color: var(--cds-support-warning); }
+.progress-fill.high     { background-color: #db6d28; }
+.progress-fill.critical { background-color: var(--cds-support-error); }
+.pct-label {
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    margin-left: 8px;
+    vertical-align: middle;
+    color: var(--cds-text-secondary);
+}
+
+.empty-state {
+    text-align: center;
+    padding: 40px;
+    color: var(--cds-text-helper);
+    font-style: normal;
+    border: 1px dashed var(--cds-border-strong-01);
+    background-color: var(--cds-background);
+}
+
+canvas { max-width: 100%; }
+
+.footer {
+    margin-top: 80px;
+    padding: 32px;
+    background-color: var(--cds-layer-01);
+    border: 1px solid var(--cds-border-subtle-01);
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr 1fr;
+    gap: 32px;
+    align-items: start;
+}
+
+.footer-col { display: flex; flex-direction: column; gap: 8px; }
+.footer-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--cds-text-helper);
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+.footer-value {
+    font-size: 13px;
+    color: var(--cds-text-primary);
+    font-family: 'IBM Plex Mono', monospace;
+    line-height: 1.6;
+    word-break: break-all;
+}
+.footer-value strong { color: var(--cds-text-primary); font-weight: 500; }
+
+.grade-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 16px;
+    background-color: var(--cds-layer-02);
+    border: 1px solid var(--cds-border-subtle-01);
+    cursor: help;
+    position: relative;
+    transition: border-color 0.15s ease;
+}
+.grade-card:hover { border-color: var(--cds-blue); }
+.grade-card .grade-letter {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 64px;
+    font-weight: 300;
+    line-height: 1;
+    margin-bottom: 8px;
+}
+.grade-card .grade-rate { font-size: 12px; font-family: 'IBM Plex Mono', monospace; color: var(--cds-text-secondary); letter-spacing: 0.5px; }
+.grade-card .grade-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--cds-text-helper);
+    margin-top: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 500;
+}
+.grade-card[data-tooltip]:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--cds-layer-02);
+    border: 1px solid var(--cds-blue);
+    color: var(--cds-text-primary);
+    padding: 12px 16px;
+    font-size: 11px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    text-transform: none;
+    letter-spacing: normal;
+    line-height: 1.5;
+    width: 240px;
+    text-align: left;
+    z-index: 10;
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    white-space: pre-wrap;
+}
+
+.action-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 500;
+    background-color: var(--cds-layer-02);
+    color: var(--cds-text-primary);
+    border: 1px solid var(--cds-border-strong-01);
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+    text-decoration: none;
+}
+.btn:hover { background-color: var(--cds-layer-01); border-color: var(--cds-blue); }
+.btn-primary { background-color: var(--cds-blue); color: #ffffff; border-color: var(--cds-blue); }
+.btn-primary:hover { background-color: #0353e9; border-color: #0353e9; }
+.btn-icon { width: 14px; height: 14px; flex-shrink: 0; }
+
+.footer-meta {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--cds-border-subtle-01);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--cds-text-helper);
+    font-family: 'IBM Plex Mono', monospace;
+    grid-column: 1 / -1;
+}
+.footer-meta a { color: var(--cds-link); text-decoration: none; }
+.footer-meta a:hover { text-decoration: underline; }
+
+.disclaimer-box {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 32px;
+}
+.disclaimer-box.is-open { display: flex; }
+.disclaimer-modal {
+    background-color: var(--cds-layer-01);
+    border: 1px solid var(--cds-border-strong-01);
+    max-width: 560px;
+    width: 100%;
+    padding: 32px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.disclaimer-modal h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--cds-text-primary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.disclaimer-modal p {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--cds-text-secondary);
+    margin-bottom: 16px;
+}
+.disclaimer-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 24px; }
+
+@media (max-width: 768px) {
+    .grid-2 { grid-template-columns: 1fr; }
+    .kpi-row { grid-template-columns: repeat(2, 1fr); }
+    .footer { grid-template-columns: 1fr; gap: 24px; }
+    body { padding: 16px; }
+}
+
+@media print {
+    body { background-color: #ffffff; color: #000000; padding: 12px; }
+    .header, .footer, .kpi-card, .card { background-color: #ffffff !important; border-color: #d0d0d0 !important; break-inside: avoid; }
+    .footer { display: none; }
+    .section-title { color: #000000; border-bottom-color: #000000; }
+    thead th { background-color: #f4f4f4; color: #000000; }
+    .no-print { display: none; }
+}
+</style>
+</head>
+<body>
+"@
+}
+
+# ============================================================================
+# Get-StandardHtmlOpen - opens <body> with header bar + KPI tiles.
+# Pass a hashtable of @{value=...; label=...; color=...} for each KPI.
+# ============================================================================
+function Get-StandardHtmlOpen {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter()][string]$Subtitle = '',
+        [Parameter()][string]$GeneratedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),
+        [Parameter()][string]$Operator = '',
+        [Parameter()][hashtable[]]$Kpis = @()
+    )
+
+    $kpiHtml = ''
+    foreach ($k in $Kpis) {
+        $color = if ($k.ContainsKey('color') -and $k['color']) { "color:$($k['color'])" } else { '' }
+        $kpiHtml += "<div class=`"kpi-card`"><div class=`"kpi-value`" style=`"$color`">$($k['value'])</div><div class=`"kpi-label`">$($k['label'])</div></div>`n"
+    }
+
+    $operatorRow = if ($Operator) { "<div style=`"margin-top: 4px;`">OPERATOR: $Operator</div>" } else { '' }
+
+    return @"
+<div class="header">
+    <div class="header-left">
+        <h1>$Title</h1>
+        <div class="subtitle">$Subtitle</div>
+    </div>
+    <div class="header-right">
+        <div>GENERATED: $GeneratedAt</div>
+        $operatorRow
+    </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="kpi-row">
+$kpiHtml</div>
+"@
+}
+
+# ============================================================================
+# Get-StandardHtmlFooter - emits the canonical 3-column footer + modal.
+# ============================================================================
+function Get-StandardHtmlFooter {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$Tenant = '',
+        [Parameter()][string]$Operator = '',
+        [Parameter()][string]$GeneratedAt = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),
+        [Parameter()][string]$Timezone = [System.TimeZoneInfo]::Local.DisplayName,
+        [Parameter()][string]$Utc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"),
+        [Parameter()][string]$RunId = ([guid]::NewGuid().ToString().Substring(0, 8).ToUpper()),
+        [Parameter()][string]$Version = '1.0.0',
+        [Parameter()][string]$ReportName = 'Report',
+        [Parameter()][string]$Grade = '',
+        [Parameter()][string]$GradeRate = '',
+        [Parameter()][string]$GradeColor = '',
+        [Parameter()][string]$GradeTip = ''
+    )
+
+    $gradeBlock = if ($Grade) {
+        $tipAttr = if ($GradeTip) { " data-tooltip=`"$GradeTip`"" } else { '' }
+        @"
+    <div class="footer-col">
+        <div class="grade-card"$tipAttr>
+            <div class="grade-letter" style="color:$GradeColor">$Grade</div>
+            <div class="grade-rate">$GradeRate</div>
+            <div class="grade-label">Compliance Grade</div>
+        </div>
+    </div>
+"@
+    } else {
+        '<div class="footer-col"></div>'
+    }
+
+    return @"
+<!-- Footer -->
+<div class="footer">
+    <div class="footer-col">
+        <div class="footer-label">Tenant</div>
+        <div class="footer-value"><strong>$Tenant</strong></div>
+        <div class="footer-label" style="margin-top:12px;">Operator</div>
+        <div class="footer-value">$Operator</div>
+        <div class="footer-label" style="margin-top:12px;">Generated</div>
+        <div class="footer-value">$GeneratedAt</div>
+        <div class="footer-value" style="color:var(--cds-text-helper);font-size:11px;">$Timezone &middot; UTC $Utc</div>
+    </div>
+$gradeBlock
+    <div class="footer-col">
+        <div class="footer-label">Run</div>
+        <div class="footer-value">$RunId</div>
+        <div class="footer-label" style="margin-top:12px;">Quick Actions</div>
+        <div class="action-bar">
+            <button class="btn btn-primary" onclick="window.print()" title="Print or save as PDF">
+                <svg class="btn-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2h8v3H4V2zm0 5h8a2 2 0 0 1 2 2v3h-2v3H4v-3H2V9a2 2 0 0 1 2-2zm1 7v-3h6v3H5z"/></svg>
+                Print
+            </button>
+            <button class="btn" onclick="navigator.clipboard.writeText(window.location.href)" title="Copy file path">
+                <svg class="btn-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M5 2h7a1 1 0 0 1 1 1v9h-2V4H6v8H4V3a1 1 0 0 1 1-1zM2 5h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1 2v6h6V7H3z"/></svg>
+                Copy Path
+            </button>
+            <button class="btn" onclick="document.querySelector('.header').scrollIntoView({behavior:'smooth'})" title="Back to top">
+                <svg class="btn-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 3.5l5 5h-3v4H6v-4H3l5-5z"/></svg>
+                Top
+            </button>
+        </div>
+        <div class="action-bar" style="margin-top:8px;">
+            <button class="btn" onclick="document.getElementById('disclaimerModal').classList.add('is-open')" title="View full disclaimer">
+                <svg class="btn-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 3a1 1 0 0 1 1 1v4a1 1 0 0 1-2 0V5a1 1 0 0 1 1-1zm0 8a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/></svg>
+                Disclaimer
+            </button>
+        </div>
+    </div>
+    <div class="footer-meta">
+        <span>$ReportName &middot; v$Version &middot; Run $RunId</span>
+        <span>Generated by <a href="https://github.com/mabdulkadr/powershell-enterprise-admin-skill" target="_blank" rel="noopener">PowerShell Enterprise Admin</a></span>
+    </div>
+</div>
+
+<!-- Disclaimer modal -->
+<div class="disclaimer-box" id="disclaimerModal" onclick="if(event.target===this)this.classList.remove('is-open')">
+    <div class="disclaimer-modal">
+        <h3>Disclaimer</h3>
+        <p>This report is generated from read-only queries and is provided as-is with no warranty of any kind. The metrics and identifiers shown are a point-in-time snapshot and may not reflect the current state by the time this report is reviewed.</p>
+        <p>Test generated tools in a staging environment before deploying to production. The authors assume no liability for any damage or data loss resulting from their use.</p>
+        <p>This report may contain tenant identifiers and operator account names. Treat the file as confidential and follow your organization's data-handling policy when sharing.</p>
+        <div class="disclaimer-actions">
+            <button class="btn" onclick="document.getElementById('disclaimerModal').classList.remove('is-open')">Close</button>
+        </div>
+    </div>
+</div>
+"@
+}
+
+# ============================================================================
+# Get-StandardHtmlClose - emits </body></html> + the standard JS helpers.
+# ============================================================================
+function Get-StandardHtmlClose {
+    [CmdletBinding()]
+    param()
+
+    return @"
+<script>
+// Close disclaimer modal on Escape
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const m = document.getElementById('disclaimerModal');
+        if (m) m.classList.remove('is-open');
+    }
+});
+</script>
+</body>
+</html>
+"@
+}
+
+# ============================================================================
+# Get-StandardHtmlChartScripts - optional helper for scripts that draw donuts/bars.
+# ============================================================================
+function Get-StandardHtmlChartScripts {
+    [CmdletBinding()]
+    param()
+
+    return @"
+<script>
+// Mini donut chart renderer (no dependencies)
+function drawDonut(canvasId, data, colors) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const cx = canvas.width / 2, cy = canvas.height / 2;
+    const outerR = 76, innerR = 58;
+    const total = data.reduce((a, b) => a + b, 0);
+    if (total === 0) return;
+    let startAngle = -Math.PI / 2;
+    data.forEach((val, i) => {
+        const sliceAngle = (val / total) * 2 * Math.PI;
+        ctx.beginPath();
+        ctx.arc(cx, cy, outerR, startAngle, startAngle + sliceAngle);
+        ctx.arc(cx, cy, innerR, startAngle + sliceAngle, startAngle, true);
+        ctx.closePath();
+        ctx.fillStyle = colors[i];
+        ctx.fill();
+        startAngle += sliceAngle;
+    });
+}
+
+// Bar chart renderer
+function drawBars(containerId, data, colorFn) {
+    const container = document.getElementById(containerId);
+    if (!container || !data) return;
+    const dataArray = Array.isArray(data) ? data : [data];
+    if (!dataArray.length || (dataArray.length === 1 && !dataArray[0])) return;
+    const maxVal = Math.max(...dataArray.map(d => d.value || 0));
+    const colors = ['#0f62fe','#8a3ffc','#00b0ff','#008080','#da1e28','#ff832b','#8d8d8d','#e0e0e0'];
+    dataArray.forEach((item, i) => {
+        if (!item) return;
+        const val = item.value || 0;
+        const label = item.label || 'Unknown';
+        const pct = maxVal > 0 ? (val / maxVal * 100) : 0;
+        const color = colorFn ? colorFn(item, i) : colors[i % colors.length];
+        const row = document.createElement('div');
+        row.className = 'bar-row';
+        row.innerHTML =
+            '<div class="bar-label" title="' + label + '">' + label + '</div>' +
+            '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%;background-color:' + color + '">' + val + '</div></div>';
+        container.appendChild(row);
+    });
+}
+</script>
+"@
+}
+
+# ============================================================================
+# Export-StandardHtmlReport - convenience: build + write a complete report in one call.
+# Pass -Body as the HTML between header and footer.
+# ============================================================================
+function Export-StandardHtmlReport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$OutputPath,
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter()][string]$Subtitle = '',
+        [Parameter()][string]$Tenant = '',
+        [Parameter()][string]$Operator = '',
+        [Parameter()][string]$Body = '',
+        [Parameter()][hashtable[]]$Kpis = @(),
+        [Parameter()][string]$Grade = '',
+        [Parameter()][string]$GradeRate = '',
+        [Parameter()][string]$GradeColor = '',
+        [Parameter()][string]$GradeTip = '',
+        [Parameter()][string]$Version = '1.0.0',
+        [Parameter()][string]$ReportName = 'Report',
+        [Parameter()][string]$ChartScripts = ''
+    )
+
+    $now = Get-Date
+    $html = Get-StandardHtmlHead -Title $Title -Subtitle $Subtitle
+    $html += Get-StandardHtmlOpen -Title $Title -Subtitle $Subtitle -GeneratedAt $now.ToString('yyyy-MM-dd HH:mm:ss') -Operator $Operator -Kpis $Kpis
+    $html += $Body
+    $html += Get-StandardHtmlFooter -Tenant $Tenant -Operator $Operator -GeneratedAt $now.ToString('yyyy-MM-dd HH:mm:ss') `
+        -Timezone ([System.TimeZoneInfo]::Local.DisplayName) `
+        -Utc $now.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") `
+        -RunId ([guid]::NewGuid().ToString().Substring(0, 8).ToUpper()) `
+        -Version $Version -ReportName $ReportName `
+        -Grade $Grade -GradeRate $GradeRate -GradeColor $GradeColor -GradeTip $GradeTip
+    if ($ChartScripts) { $html += "`n$ChartScripts" }
+    $html += Get-StandardHtmlClose
+
+    $html | Out-File -FilePath $OutputPath -Encoding utf8 -Force
+}

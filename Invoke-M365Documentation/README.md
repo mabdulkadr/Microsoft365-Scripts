@@ -1,10 +1,10 @@
 <div align="center">
 
-# 💻 Add-DevicesToAzureADGroup
+# 💻 Invoke-M365Documentation
 
-**Bulk-add devices to an Entra ID group by device name.**
+**Generate Word documentation for Microsoft 365 components (Intune + Entra ID).**
 
-Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
+Menu-driven section picker on top of the M365Documentation module, with timestamped `.docx` output.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,26 +20,25 @@ Resolves names to Device Object IDs first — the step Azure AD's bulk import ca
 
 # 📖 Overview
 
-**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
+**Invoke-M365Documentation** is a PowerShell script that generates detailed Word documentation for Microsoft 365 components, focusing on **Intune** and **Entra ID**. A menu lets you pick the component and include/exclude sections dynamically. Data collection and rendering are powered by the [M365Documentation module](https://github.com/ThomasKur/M365Documentation).
 
 ---
 
 # ✨ Features
 
-* Bulk add from a CSV of device names
-* Automatic Device ID lookup per name
-* Handles duplicate device names (adds all matches)
-* Skips not-found / already-member devices with per-device output
+* Intune coverage: configuration/compliance policies, apps, autopilot, baselines, roles, and more
+* Entra ID coverage: domains, CA policies, auth policies, rollout policies, org settings, SKUs, admin units
+* Dynamic include/exclude section picker with input validation
+* Timestamped Word output per component
 
 ---
 
 # 📂 Project Structure
 
 ```text
-Add-DevicesToAzureADGroup
+Invoke-M365Documentation
 │
-├── Add-DevicesToAzureADGroup.ps1
-├── SampleDevicesFile.csv
+├── Invoke-M365Documentation.ps1
 └── README.md
 ```
 
@@ -49,27 +48,19 @@ Add-DevicesToAzureADGroup
 
 ### Basic Usage
 ```powershell
-.\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
+.\Invoke-M365Documentation.ps1
 ```
 
-### CSV Format
-```csv
-DeviceName
-Device-01
-Device-02
-Device-03
-```
-
-Device names must match Entra ID exactly.
+### How It Works
+1. Fill in `$TenantId`, `$ClientId`, `$ClientSecret` inside the script.
+2. Run it, pick **Intune** or **AzureAD**, optionally filter sections.
+3. Collect `Reports\<timestamp>-<component>-Documentation.docx` (beside the script).
 
 ---
 
 # ⚙️ Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `GroupName` | String | Yes | — | Target Entra ID group name. |
-| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
+This script takes no command-line parameters. Credentials and `$OutputDirectory` (`Reports\` beside the script) are set inside the script.
 
 ### Exit Codes
 | Code | Status |
@@ -86,18 +77,23 @@ Device names must match Entra ID exactly.
 
 ### PowerShell
 * PowerShell **5.1 or later**
-* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
+
+### Modules
+* `MSAL.PS`, `PSWriteOffice`, `M365Documentation` (auto-installed if missing)
 
 ### Permissions
-* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
+* App registration with Graph application permissions (`Directory.Read.All`, `DeviceManagement*.Read.All`, `Domain.Read.All`, `Policy.Read.All`, `Organization.Read.All`, `User.Read`, …) + admin consent.
+
+### Logging
+* `C:\ProgramData\Microsoft365Scripts\Logs\`
 
 ---
 
 # 🛡 Operational Notes
-* Connects to Azure AD automatically before operating.
-* Members already in the group are skipped, not errored.
-* Sample input: `SampleDevicesFile.csv` in this folder.
-* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
+* If API permission errors occur: verify the app registration, re-grant admin consent, or `Connect-MgGraph` manually first.
+* If module installs fail: `Install-Module -Name MSAL.PS, PSWriteOffice, M365Documentation -Force`.
+* Never commit real Tenant IDs or secrets.
+* Reference: [M365Documentation module](https://github.com/ThomasKur/M365Documentation).
 
 ---
 

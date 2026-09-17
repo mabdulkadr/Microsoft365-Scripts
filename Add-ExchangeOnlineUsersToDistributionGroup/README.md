@@ -1,10 +1,10 @@
 <div align="center">
 
-# 💻 Add-DevicesToAzureADGroup
+# 💻 Add-ExchangeOnlineUsersToDistributionGroup
 
-**Bulk-add devices to an Entra ID group by device name.**
+**Bulk-add users from a CSV file to an Exchange Online distribution group.**
 
-Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
+Interactive CSV picker + group prompt with per-user result logging.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,26 +20,25 @@ Resolves names to Device Object IDs first — the step Azure AD's bulk import ca
 
 # 📖 Overview
 
-**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
+**Add-ExchangeOnlineUsersToDistributionGroup** is a PowerShell script that reads user email addresses from a CSV file and adds each user to a target Exchange Online distribution group. It verifies the `ExchangeOnlineManagement` module, prompts for the CSV file and the group identity, and optionally saves a run log.
 
 ---
 
 # ✨ Features
 
-* Bulk add from a CSV of device names
-* Automatic Device ID lookup per name
-* Handles duplicate device names (adds all matches)
-* Skips not-found / already-member devices with per-device output
+* Interactive CSV file picker — no hardcoded input paths
+* Group ID/name prompt at runtime
+* Module check with install prompt for `ExchangeOnlineManagement`
+* Optional run-log export to a location you choose
 
 ---
 
 # 📂 Project Structure
 
 ```text
-Add-DevicesToAzureADGroup
+Add-ExchangeOnlineUsersToDistributionGroup
 │
-├── Add-DevicesToAzureADGroup.ps1
-├── SampleDevicesFile.csv
+├── Add-ExchangeOnlineUsersToDistributionGroup.ps1
 └── README.md
 ```
 
@@ -49,18 +48,13 @@ Add-DevicesToAzureADGroup
 
 ### Basic Usage
 ```powershell
-.\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
+.\Add-ExchangeOnlineUsersToDistributionGroup.ps1
 ```
 
-### CSV Format
-```csv
-DeviceName
-Device-01
-Device-02
-Device-03
+### With Parameters
+```powershell
+.\Add-ExchangeOnlineUsersToDistributionGroup.ps1 -ModuleName "ExchangeOnlineManagement"
 ```
-
-Device names must match Entra ID exactly.
 
 ---
 
@@ -68,8 +62,7 @@ Device names must match Entra ID exactly.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `GroupName` | String | Yes | — | Target Entra ID group name. |
-| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
+| `ModuleName` | String | No | `ExchangeOnlineManagement` | Module to verify/install before connecting. |
 
 ### Exit Codes
 | Code | Status |
@@ -86,18 +79,17 @@ Device names must match Entra ID exactly.
 
 ### PowerShell
 * PowerShell **5.1 or later**
-* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
+* `ExchangeOnlineManagement` module (verified/installed at runtime)
 
 ### Permissions
-* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
+* Exchange Online rights to manage distribution group membership.
 
 ---
 
 # 🛡 Operational Notes
-* Connects to Azure AD automatically before operating.
-* Members already in the group are skipped, not errored.
-* Sample input: `SampleDevicesFile.csv` in this folder.
-* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
+* CSV rows must contain user email addresses (one per row).
+* Confirm the target group identity before bulk-adding hundreds of members.
+* Keep the optional run log as your audit record.
 
 ---
 

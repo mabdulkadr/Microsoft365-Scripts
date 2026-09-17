@@ -1,118 +1,134 @@
+<div align="center">
 
-# Azure AD Static Device Group Management Script
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![PowerShell](https://img.shields.io/badge/powershell-5.1%2B-blue.svg)
-![Version](https://img.shields.io/badge/version-1.0.0-green.svg)
+# 💻 AzureAD-DeviceGroupManagement
 
-## Overview
+**Group Intune devices into static Entra ID groups (interactive flow).**
 
-The **Azure AD Static Device Group Management** PowerShell script automates the creation and management of static Azure Active Directory (Azure AD) groups by integrating with Microsoft Intune and Microsoft Graph. This ensures efficient organization of Windows devices within Azure AD, adhering to membership limits and facilitating streamlined device management.
+Prefix-based discovery, overflow groups, batched assignment — with manual sign-in.
 
-## Features
+[![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0F172A?style=for-the-badge)](#%EF%B8%8F-requirements)
+[![License](https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge)](#-license)
+[![Version](https://img.shields.io/badge/Version-1.0.0-334155?style=for-the-badge)](#-overview)
 
-- **Automated Group Management**: Identifies existing static groups with a specified prefix and creates new groups as needed to accommodate all devices.
-- **Device Assignment**: Retrieves Windows devices from Intune and assigns them to appropriate Azure AD groups without exceeding the defined member limit per group.
-- **Batch Processing**: Handles large numbers of devices by processing them in configurable batches.
-- **Logging**: Optionally logs all operations to a specified file for auditing and troubleshooting.
-- **Modular Integration**: Utilizes Microsoft Graph and Azure AD modules for seamless integration and management.
+[Overview](#-overview) • [Features](#-features) • [Usage](#-usage) • [Parameters](#%EF%B8%8F-parameters) • [License](#-license)
 
-## Prerequisites
+</div>
 
-- **PowerShell 5.1** or later (recommended PowerShell 7+)
-- **AzureAD Module**: Ensure the `AzureAD` PowerShell module is installed.
-- **Microsoft Graph Modules**: The script will automatically install the required Microsoft Graph modules if they are not already present on the system.
-- **Permissions**: 
-  - Administrative access to Azure AD.
-  - Permissions to create and manage groups and group memberships.
-- **Intune Access**: Access to Microsoft Intune to retrieve device information.
+---
 
+# 📖 Overview
 
-## Usage
+**AzureAD-DeviceGroupManagement** is a PowerShell script that manages static Entra ID groups for Intune devices. It connects to Microsoft Graph (app credentials from the config block, then a manual Azure AD connection), finds or creates prefix-matched groups, and distributes devices so no group exceeds the member limit.
 
-### Running the Script
+---
 
-Execute the script using PowerShell:
+# ✨ Features
 
+* Prefix-based static group discovery with automatic overflow creation
+* Intune Windows-device retrieval with batched assignment
+* Configurable batch size and zero-padded group numbering
+* Optional file logging for auditing and troubleshooting
+
+---
+
+# 📂 Project Structure
+
+```text
+AzureAD-DeviceGroupManagement
+│
+├── AzureAD-DeviceGroupManagement.ps1
+└── README.md
+```
+
+---
+
+# 🚀 Usage
+
+### Basic Usage
 ```powershell
 .\AzureAD-DeviceGroupManagement.ps1
 ```
 
-### Parameters
-
-The script accepts the following parameters to customize its behavior:
-
-- `-BatchSize` *(int)*: Specifies the maximum number of devices per group. Default is `500`.
-
-  ```powershell
-  -BatchSize 300
-  ```
-
-- `-GroupNamePrefix` *(string)*: Defines the prefix for the Azure AD group names. Default is `"Devices-group"`.
-
-  ```powershell
-  -GroupNamePrefix "CorporateDevices-"
-  ```
-
-- `-NamePadding` *(int)*: Determines the number of digits in the group numbering. Default is `2` (e.g., `01`, `02`, etc.).
-
-  ```powershell
-  -NamePadding 3
-  ```
-
-- `-EnableLogging` *(switch)*: Enables logging of script operations to a file.
-
-  ```powershell
-  -EnableLogging
-  ```
-
-- `-LogFilePath` *(string)*: Specifies the path to the log file. Default is `"C:\CreateStaticGroup\GroupCreationLog.txt"`.
-
-  ```powershell
-  -LogFilePath "D:\Logs\AzureADGroupManagement.log"
-  ```
-
-### Example
-
+### With Parameters
 ```powershell
 .\AzureAD-DeviceGroupManagement.ps1 -BatchSize 300 -GroupNamePrefix "CorporateDevices-" -NamePadding 3 -EnableLogging -LogFilePath "D:\Logs\AzureADGroupManagement.log"
 ```
 
-This command will:
+---
 
-- Create groups with the prefix `CorporateDevices-` (e.g., `CorporateDevices-001`, `CorporateDevices-002`, etc.).
-- Assign up to `300` devices per group.
-- Use `3` digits for group numbering.
-- Enable logging and save logs to `D:\Logs\AzureADGroupManagement.log`.
+# ⚙️ Parameters
 
-## Logging
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `BatchSize` | Int | No | `500` | Max devices per group before a new overflow group is created. |
+| `GroupNamePrefix` | String | No | `Devices-group` | Prefix for discovered/created static groups. |
+| `NamePadding` | Int | No | `2` | Zero-padded digits in group numbering (`01`, `02`, …). |
+| `EnableLogging` | Switch | No | off | Writes operations to the log file. |
+| `LogFilePath` | String | No | `GroupCreationLog.txt` (beside the script) | Log file path (used with `-EnableLogging`). |
 
-When the `-EnableLogging` switch is used, the script logs all operations, including successes, warnings, and errors, to the specified log file. This is useful for auditing purposes and troubleshooting any issues that arise during execution.
-
-**Log File Structure:**
-
+### Log Format
 ```
 [2024-11-10 14:23:45] [INFO] Retrieving all Windows PC devices from Microsoft Graph...
 [2024-11-10 14:23:50] [SUCCESS] Total devices retrieved: 1500
-[2024-11-10 14:23:50] [INFO] Retrieving existing groups with prefix 'Devices-group'...
-[2024-11-10 14:23:55] [INFO] Next group number to create: 3
-...
 ```
 
-## Notes
-
-- **Permissions**: Ensure the script is executed with appropriate permissions to access Microsoft Graph and Azure AD. This typically requires administrative privileges.
-- **Static Groups**: This script manages static group memberships exclusively and does not handle dynamic group rules or memberships.
-- **Security**: Store the App Secret and other sensitive information securely. Avoid hardcoding sensitive data directly within scripts.
-- **Modules**: The script automatically installs required Microsoft Graph modules if they are not already present on the system.
-- **Error Handling**: The script includes robust error handling to capture and log issues during execution, such as failures in group creation or device assignment.
-- **Module Installation**: If the required Microsoft Graph modules are not present, the script will attempt to install them automatically. Ensure that the executing user has the necessary permissions to install PowerShell modules.
-
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
-
+### Exit Codes
+| Code | Status |
+| ---- | ------ |
+| 0    | Success |
+| 1    | Failure |
 
 ---
 
-**Disclaimer**: Use these scripts at your own risk. Ensure you understand their impact before running them in a production environment. Always review and test scripts thoroughly.
+# ⚙️ Requirements
+
+### Operating System
+* Windows 10 / Windows 11
+
+### PowerShell
+* PowerShell **5.1 or later**
+* `AzureAD` module; Microsoft Graph modules (auto-installed if missing)
+
+### Permissions
+* Entra ID admin able to create groups and manage memberships; Intune device read.
+
+---
+
+# 🛡 Operational Notes
+* Manages **static** memberships only — no dynamic rules.
+* Store the App Secret securely; avoid hardcoding sensitive data — prefer Key Vault / Secret Store.
+* Unattended app-only variant: [`AzureAD-DeviceGroupManagement-AppAuth`](../AzureAD-DeviceGroupManagement-AppAuth/README.md).
+
+---
+
+## 👤 Author
+
+**Mohammad Abdelkader Omar**
+GitHub: [@mabdulkadr](https://github.com/mabdulkadr)
+Website: [momar.tech](https://momar.tech)
+
+---
+
+## 📜 License
+This project is licensed under the [MIT License](https://opensource.org/licenses/MIT).
+
+---
+
+## ⚠ Disclaimer
+
+This skill and every script it generates are provided as-is with no warranty of any kind. Test generated tools in a staging environment before deploying to production. The authors assume no liability for any damage or data loss resulting from their use.
+
+---
+<div align="center">
+
+⭐ **If this skill saves you time, star the repo — it helps others find it.**
+
+[Report an Issue](../../issues) · [momar.tech](https://momar.tech)
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/mabdulkadrx)
+
+Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin-skill)
+
+</div>

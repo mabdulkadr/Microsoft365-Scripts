@@ -1,10 +1,10 @@
 <div align="center">
 
-# 💻 Add-DevicesToAzureADGroup
+# 💻 Remove-GuestUsersFromCsv
 
-**Bulk-add devices to an Entra ID group by device name.**
+**Bulk-remove Entra ID guest users listed in a CSV file — with safety checks.**
 
-Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
+Second half of the guest lifecycle toolkit: [`Get-GuestUserReport`](../Get-GuestUserReport/README.md) audits, this script removes.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,26 +20,27 @@ Resolves names to Device Object IDs first — the step Azure AD's bulk import ca
 
 # 📖 Overview
 
-**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
+**Remove-GuestUsersFromCsv** is a PowerShell script that bulk-deletes guest accounts from Entra ID using a CSV list. Each row is looked up by `UserPrincipalName`, verified to be a guest (`UserType = Guest`), and only then deleted — member accounts are never touched. A console summary reports deleted / skipped / not-found / failed counts.
 
 ---
 
 # ✨ Features
 
-* Bulk add from a CSV of device names
-* Automatic Device ID lookup per name
-* Handles duplicate device names (adds all matches)
-* Skips not-found / already-member devices with per-device output
+* Interactive file dialog for CSV selection — no hardcoded paths
+* Guest-type verification per row (members are skipped, never deleted)
+* Per-action logging with an end-of-run console summary
+* Sample CSVs included (`exportUsers_2025-7-3.csv`)
 
 ---
 
 # 📂 Project Structure
 
 ```text
-Add-DevicesToAzureADGroup
+Remove-GuestUsersFromCsv
 │
-├── Add-DevicesToAzureADGroup.ps1
-├── SampleDevicesFile.csv
+├── Remove-GuestUsersFromCSV.ps1
+├── exportUsers_2025-7-3.csv
+├── exportUsers_2025-7-3-IT-OP-030.csv
 └── README.md
 ```
 
@@ -49,27 +50,26 @@ Add-DevicesToAzureADGroup
 
 ### Basic Usage
 ```powershell
-.\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
+.\Remove-GuestUsersFromCSV.ps1
 ```
+
+### How It Works
+1. Run the script and select your CSV file when prompted.
+2. For each row: look up the account by `UserPrincipalName`, confirm `UserType = Guest`, delete it.
+3. Review the console summary (deleted / skipped / not found / failed).
 
 ### CSV Format
 ```csv
-DeviceName
-Device-01
-Device-02
-Device-03
+DisplayName,UserPrincipalName
+m.abdelkader,m.abdelkader_upm.xyz.com#EXT#@abc.onmicrosoft.com
+372113519,372113519_cloud.sa#EXT#@abc.onmicrosoft.com
 ```
-
-Device names must match Entra ID exactly.
 
 ---
 
 # ⚙️ Parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `GroupName` | String | Yes | — | Target Entra ID group name. |
-| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
+This script takes no command-line parameters; the input CSV is chosen via file dialog at runtime.
 
 ### Exit Codes
 | Code | Status |
@@ -86,18 +86,17 @@ Device names must match Entra ID exactly.
 
 ### PowerShell
 * PowerShell **5.1 or later**
-* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
+* `Microsoft.Graph` module (`Install-Module Microsoft.Graph -Scope CurrentUser`)
 
 ### Permissions
-* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
+* Entra ID rights to delete guest users.
 
 ---
 
 # 🛡 Operational Notes
-* Connects to Azure AD automatically before operating.
-* Members already in the group are skipped, not errored.
-* Sample input: `SampleDevicesFile.csv` in this folder.
-* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
+* Destructive by design: test on a small CSV (or staging tenant) before bulk runs.
+* Keep a backup of the input CSV and the pre-removal report as your audit record.
+* CSV must contain a `UserPrincipalName` column; extra columns are ignored.
 
 ---
 

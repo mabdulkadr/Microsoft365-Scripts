@@ -1,10 +1,10 @@
 <div align="center">
 
-# 💻 Add-DevicesToAzureADGroup
+# 💻 Get-GuestUserReport
 
-**Bulk-add devices to an Entra ID group by device name.**
+**Export all Entra ID guest users and their group memberships to CSV + Carbon HTML.**
 
-Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
+Audit companion to [`Remove-GuestUsersFromCsv`](../Remove-GuestUsersFromCsv/README.md) — report first, remove second.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,26 +20,25 @@ Resolves names to Device Object IDs first — the step Azure AD's bulk import ca
 
 # 📖 Overview
 
-**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
+**Get-GuestUserReport** is a PowerShell script that exports every guest (`UserType = Guest`) in the Entra ID tenant to a timestamped CSV: display name, UPN, email, company, invitation/redemption status, creation date, and group memberships. Use it as the audit record before any bulk removal.
 
 ---
 
 # ✨ Features
 
-* Bulk add from a CSV of device names
-* Automatic Device ID lookup per name
-* Handles duplicate device names (adds all matches)
-* Skips not-found / already-member devices with per-device output
+* Full guest inventory via Microsoft Graph (`UserType = Guest`)
+* Age filters for stale-account reviews (`-StaleGuests`, `-RecentlyCreatedGuests`)
+* Per-guest group membership collection
+* Timestamped CSV + Carbon Dark HTML dashboard (shared timestamp) with an offer to open the CSV on completion
 
 ---
 
 # 📂 Project Structure
 
 ```text
-Add-DevicesToAzureADGroup
+Get-GuestUserReport
 │
-├── Add-DevicesToAzureADGroup.ps1
-├── SampleDevicesFile.csv
+├── Get-GuestUserReport.ps1
 └── README.md
 ```
 
@@ -49,18 +48,13 @@ Add-DevicesToAzureADGroup
 
 ### Basic Usage
 ```powershell
-.\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
+.\Get-GuestUserReport.ps1
 ```
 
-### CSV Format
-```csv
-DeviceName
-Device-01
-Device-02
-Device-03
+### With Parameters
+```powershell
+.\Get-GuestUserReport.ps1 -StaleGuests 180
 ```
-
-Device names must match Entra ID exactly.
 
 ---
 
@@ -68,14 +62,15 @@ Device names must match Entra ID exactly.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `GroupName` | String | Yes | — | Target Entra ID group name. |
-| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
+| `StaleGuests` | Int | No | (all) | Only guests older than N days. |
+| `RecentlyCreatedGuests` | Int | No | (all) | Only guests newer than N days. |
 
 ### Exit Codes
 | Code | Status |
 | ---- | ------ |
 | 0    | Success |
 | 1    | Failure |
+| 2    | Script error |
 
 ---
 
@@ -86,18 +81,17 @@ Device names must match Entra ID exactly.
 
 ### PowerShell
 * PowerShell **5.1 or later**
-* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
+* `Microsoft.Graph` module (`Install-Module Microsoft.Graph -Scope CurrentUser`)
 
 ### Permissions
-* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
+* `User.Read.All`, `Directory.Read.All` (Microsoft Graph).
 
 ---
 
 # 🛡 Operational Notes
-* Connects to Azure AD automatically before operating.
-* Members already in the group are skipped, not errored.
-* Sample input: `SampleDevicesFile.csv` in this folder.
-* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
+* Report columns: Display Name, UPN, Email, Company, Invitation/Redemption status, Creation Date, Group Memberships.
+* Review the report to confirm identity and account status before deleting anything.
+* Pair with [`Remove-GuestUsersFromCsv`](../Remove-GuestUsersFromCsv/README.md) for the full audit → remove lifecycle.
 
 ---
 

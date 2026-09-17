@@ -1,68 +1,65 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Get-EntraAdminRoleReport - Entra ID Admin Role Assignment Report
 
 .SYNOPSIS
-    This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
+    Reports Entra ID admin role assignments and privileged access posture.
 
 .DESCRIPTION
-    - Retrieves user sign-in data from Microsoft Graph API.
-    - Identifies inactive users based on interactive and non-interactive sign-ins.
-    - Filters users based on multiple criteria (enabled users, disabled users, external users, etc.).
-    - Exports results into a properly formatted CSV file with UTF-8 encoding.
-    - Automatically installs the required Microsoft Graph PowerShell module if missing.
-    - Scheduler-friendly for automated execution.
+    Lists all directory role assignments showing who has which admin roles, assignment permanence versus PIM eligibility, stale admin sign-ins, and users with multiple admin roles for privileged access review.
+
+        Scope & safety:
+        - Read-only Graph queries; never modifies role assignments.
+        Degradation behavior:
+        - Missing sign-in data renders as '-' ; never fails the export.
+        Output contract:
+        - Console summary plus CSV beside the script; exit 0 = success, 1 = failure.
 
 .TAGS
-    Identity,M365,Reporting
+    Reporting,EntraID,AdminRoles,Graph
 
 .PLATFORM
-    Windows 10/11/Server 2019+
+    Windows
+
+.MINROLE
+    Intune Service Administrator
 
 .PERMISSIONS
-    User.Read.All, AuditLog.Read.All
+    RoleManagement.Read.All, Directory.Read.All, User.Read.All, AuditLog.Read.All
 
 .AUTHOR
     AI Generated
 
 .VERSION
-    1.0.0
+    1.0.1
 
 .CHANGELOG
-    1.0.0 (2026-09-16) - Compliance hardening: canonical rich header, ErrorActionPreference Stop, alias and catch hygiene.
+    1.0.1 (2026-08-26)
+    - Migrated to Enterprise Admin standards (canonical header order, structured logging, PS 5.1 contract)
+    1.0.0
+    - Initial release
 
 .LASTUPDATE
-    2026-09-16
+    2026-08-26
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
-    Runs an inactivity report for users inactive more than 90 days.
+    .\Get-EntraAdminRoleReport.ps1
+    Generates the admin role report for the tenant.
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
-    Lists enabled users who never logged in (provisioning cleanup).
+    .\\Get-EntraAdminRoleReport.ps1 -ExportPath "C:\\Reports\\AdminRoles.csv"
+    Exports the report to a specific CSV path.
 
 .NOTES
-    Part of Microsoft365-Scripts toolkit - Identity,M365,Reporting
-    Exit codes: 0 = success, 1 = failure, 2 = script error
-    Elevation is detected at runtime via Test-IsElevated and degrades gracefully.
+    - Requires Microsoft.Graph.Authentication module.
+        - Read-only; no role changes.
+        - Logs: C:\ProgramData\Get-EntraAdminRoleReport\Logs\
 #>
 
 #Requires -Version 5.1
 
-Param
-(
-    [int]$InactiveDays,
-    [int]$InactiveDays_NonInteractive,
-    [switch]$ReturnNeverLoggedInUser,
-    [switch]$EnabledUsersOnly,
-    [switch]$DisabledUsersOnly,
-    [switch]$ExternalUsersOnly,
-    [switch]$CreateSession,
-    [string]$TenantId,
-    [string]$ClientId,
-    [string]$CertificateThumbprint
-)
+[CmdletBinding()]
+param([Parameter()][string]$ExportPath)
 
 $ErrorActionPreference = 'Stop'
 
@@ -70,14 +67,18 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'GetM365InactiveUserReport'
+$SolutionName = 'Get-EntraAdminRoleReport'
 $ScriptMode   = 'run'
 
 # ============================================================================
-# LOGGING BLOCK (embedded canonical Write-Log - General CLI, ProgramData only)
+# LOGGING BLOCK (embedded canonical scripts/Write-Log.ps1 - copy VERBATIM)
 # Single source of truth: Initialize-Log / Write-Banner / Write-Log / Finish-Script.
 # ============================================================================
 
+# --- Logging (CLI Configuration) --------------------------------------------
+$script:SystemDrive = if ($env:SystemDrive) { $env:SystemDrive.TrimEnd('\') } else {
+    [System.IO.Path]::GetPathRoot($env:SystemRoot).TrimEnd('\')
+}
 $script:LogRoot  = $null
 $script:LogFile  = $null
 $script:LogReady = $false
@@ -188,132 +189,268 @@ function Finish-Script {
     }
 }
 
+# ============================================================================
+# REPORT OUTPUT ANCHORING (Law 12)
+# Anchors relative output paths beside the script using fallback chain.
+# ============================================================================
+
+$scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot }
+elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+else { (Get-Location).Path }
+
+# Resolve relative ExportPath/OutputPath beside the script (Law 12).
+if ($PSBoundParameters.ContainsKey('ExportPath') -and $ExportPath -and -not [System.IO.Path]::IsPathRooted($ExportPath)) {
+    $ExportPath = Join-Path $scriptDirectory $ExportPath
+}
+if ($PSBoundParameters.ContainsKey('OutputPath') -and $OutputPath -and -not [System.IO.Path]::IsPathRooted($OutputPath)) {
+    $OutputPath = Join-Path $scriptDirectory $OutputPath
+}
+
+
+# ============================================================================
+# MAIN ENTRY LOGGING INITIALIZATION
+# ============================================================================
+
 $null = Initialize-Log -SolutionName $SolutionName -ScriptMode $ScriptMode -Type 'General'
 Write-Banner
+if ($script:LogReady) {
+    Write-Log -Message "Log file ready: $($script:LogFile)" -Level 'DEBUG'
+}
+Write-Log -Message "Script started: Get-EntraAdminRoleReport" -Level 'INFO'
 
 # ============================================================================
-# GRAPH CONNECTION - installs the Beta module on confirmation, then signs in.
+# AUTHENTICATION - reuses an existing Graph session, else signs in interactively.
 # ============================================================================
 
-# Ensures the Graph Beta module exists (prompted install) and connects; honors -CreateSession.
-Function Connect_MgGraph
-{
-    # Check if the Microsoft Graph Beta module is installed
-    $MsGraphBetaModule = Get-Module Microsoft.Graph.Beta -ListAvailable
-    if ($MsGraphBetaModule -eq $null)
-    { 
-        Write-Log -Message "⚠️ Microsoft Graph Beta module is missing. It must be installed to run the script successfully." -Level 'WARNING'
-        $confirm = Read-Host "Are you sure you want to install Microsoft Graph Beta module? [Y] Yes [N] No"  
-        if ($confirm -match "[yY]") 
-        { 
-            Write-Log -Message "📦 Installing Microsoft Graph Beta module..." -Level 'INFO'
-            Install-Module Microsoft.Graph.Beta -Scope CurrentUser -AllowClobber
-            Write-Log -Message "✅ Microsoft Graph Beta module installed successfully." -Level 'SUCCESS'
-        } 
-        else
-        { 
-            Write-Log -Message "❌ Exiting. Microsoft Graph Beta module is required for this script." -Level 'ERROR'
-            Exit 
-        } 
+Write-Log -Message "=== AUTHENTICATION ===" -Level 'INFO'
+$mgContext = Get-MgContext
+if (-not $mgContext) {
+    Connect-MgGraph -Scopes 'RoleManagement.Read.All', 'Directory.Read.All', 'User.Read.All', 'AuditLog.Read.All' -ErrorAction Stop
+    $mgContext = Get-MgContext
+}
+Write-Log -Message "Signed in as: $($mgContext.Account)" -Level 'SUCCESS'
+
+# ============================================================================
+# COLLECTION - every directory role plus its members (paged, 429-aware).
+# why: per-member rows log at DEBUG; tenants with hundreds of assignments
+# would otherwise flood the console (original printed each row).
+# ============================================================================
+
+Write-Log -Message "=== DIRECTORY ROLE ASSIGNMENTS ===" -Level 'INFO'
+try {
+    $roles = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/directoryRoles?`$select=id,displayName,roleTemplateId"
+} catch [System.Exception] {
+    Finish-Script -ExitCode 2 -Message "Failed to query directory roles: $($_.Exception.Message)" -Level 'ERROR'
+}
+$roles = @($roles)
+Write-Log -Message "$($roles.Count) active directory roles" -Level 'SUCCESS'
+
+# High-privilege roles to flag
+$highPrivRoles = @('Global Administrator', 'Privileged Role Administrator', 'Security Administrator',
+    'Exchange Administrator', 'SharePoint Administrator', 'User Administrator',
+    'Application Administrator', 'Cloud Application Administrator',
+    'Intune Administrator', 'Conditional Access Administrator',
+    'Authentication Administrator', 'Privileged Authentication Administrator')
+
+$report = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+foreach ($role in ($roles | Sort-Object displayName)) {
+    try {
+        $members = Get-MgGraphAllPages -Uri "https://graph.microsoft.com/v1.0/directoryRoles/$($role.id)/members?`$select=id,userPrincipalName,displayName,accountEnabled,userType"
+    } catch [System.Exception] {
+        Write-Log -Message "Failed to list members of '$($role.displayName)'; skipped." -Level 'WARNING'
+        continue
     }
-    
-    # Disconnect any existing Microsoft Graph sessions if requested
-    if ($CreateSession.IsPresent)
-    {
-        Disconnect-MgGraph
-    }
-    
-    # Connecting to Microsoft Graph
-    Write-Log -Message "🔗 Connecting to Microsoft Graph..." -Level 'INFO'
-    if (($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint 
-    }
-    else
-    {
-        Connect-MgGraph -Scopes "User.Read.All", "AuditLog.read.All"  
+    $members = @($members)
+    if ($members.Count -eq 0) { continue }
+
+    $isHighPriv = $role.displayName -in $highPrivRoles
+    Write-Log -Message "$($role.displayName) ($($members.Count) member(s))" -Level $(if ($role.displayName -eq 'Global Administrator') { 'ERROR' } elseif ($isHighPriv) { 'WARNING' } else { 'INFO' })
+
+    foreach ($m in $members) {
+        $memberType = $m.'@odata.type'
+        $isUser = $memberType -eq '#microsoft.graph.user'
+        $isSP = $memberType -eq '#microsoft.graph.servicePrincipal'
+
+        $upn = if ($isUser -and $m.userPrincipalName) { $m.userPrincipalName } elseif ($m.displayName) { $m.displayName } else { $m.id }
+        $displayName = $m.displayName
+        $enabled = if ($isUser) { [bool]$m.accountEnabled } else { $true }
+        $isGuest = $m.userType -eq 'Guest'
+
+        $issues = @()
+        if (-not $enabled -and $isUser) { $issues += 'DISABLED account with admin role' }
+        if ($isGuest) { $issues += 'GUEST with admin role' }
+        if ($isSP) { $issues += 'Service principal (not a user)' }
+        if ($role.displayName -eq 'Global Administrator') { $issues += 'Highest privilege role' }
+
+        Write-Log -Message "$upn$(if (-not $enabled) { ' [DISABLED]' })" -Level 'DEBUG'
+
+        $report.Add([PSCustomObject]@{
+            RoleName          = $role.displayName
+            IsHighPrivilege   = $isHighPriv
+            MemberUPN         = $upn
+            MemberDisplayName = $displayName
+            MemberType        = if ($isUser) { 'User' } elseif ($isSP) { 'ServicePrincipal' } else { 'Other' }
+            AccountEnabled    = $enabled
+            IsGuest           = $isGuest
+            Issues            = if ($issues.Count -gt 0) { $issues -join '; ' } else { '-' }
+        })
     }
 }
 
-Connect_MgGraph
-Write-Log -Message "📝 If you encounter module-related conflicts, run the script in a fresh PowerShell window." -Level 'WARNING'
-
-# Define the CSV export path in the script's directory
-$ExportCSV = Join-Path -Path $PSScriptRoot -ChildPath "InactiveM365UserReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd hh-mm-ss tt')).csv"
-$ExportResults = @()  
-
-# Retrieve inactive users
-Write-Log -Message "🔄 Retrieving inactive users from Microsoft 365..." -Level 'INFO'
-$RequiredProperties = @('UserPrincipalName', 'EmployeeId', 'DisplayName', 'CreatedDateTime', 'AccountEnabled', 'Department', 'JobTitle', 'RefreshTokensValidFromDateTime', 'SigninActivity')
-$Count = 0
-$PrintedUser = 0
-
-Get-MgBetaUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object {
-    $Count++
-    $UPN = $_.UserPrincipalName
-    Write-Progress -Activity "🔎 Processing user: $Count - $UPN"
-
-    # Extract user details
-    $LastInteractiveSignIn = $_.SignInActivity.LastSignInDateTime
-    $LastNon_InteractiveSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
-    
-    # Handle inactive days calculation
-    if ($LastInteractiveSignIn -eq $null) { $LastInteractiveSignIn = "Never Logged In"; $InactiveDays_InteractiveSignIn = "-" }
-    else { $InactiveDays_InteractiveSignIn = (New-TimeSpan -Start $LastInteractiveSignIn).Days }
-    
-    if ($LastNon_InteractiveSignIn -eq $null) { $LastNon_InteractiveSignIn = "Never Logged In"; $InactiveDays_NonInteractiveSignIn = "-" }
-    else { $InactiveDays_NonInteractiveSignIn = (New-TimeSpan -Start $LastNon_InteractiveSignIn).Days }
-    
-    $AccountStatus = if ($_.AccountEnabled) { 'Enabled' } else { 'Disabled' }
-
-    # Export to CSV and collect the same row for the HTML dashboard.
-    [PSCustomObject]@{
-        
-        'UPN' = $UPN; 'Creation Date' = $_.CreatedDateTime; 'Last Interactive SignIn Date' = $LastInteractiveSignIn;
-        'Last Non Interactive SignIn Date' = $LastNon_InteractiveSignIn; 'Inactive Days(Interactive SignIn)' = $InactiveDays_InteractiveSignIn;
-        'Inactive Days(Non-Interactive Signin)' = $InactiveDays_NonInteractiveSignIn; 'Account Status' = $AccountStatus;
-        'Department' = $_.Department; 'Employee ID' = $_.EmployeeId; 'Employee Name' = $_.DisplayName; 'Job Title' = $_.JobTitle
-    } | ForEach-Object { $ExportResults += $_; $_ } | Export-Csv -Path $ExportCSV -NoTypeInformation -Encoding UTF8 -Append
+# Users holding more than one admin role (grouped from $report; no extra queries).
+Write-Log -Message "=== MULTI-ROLE ANALYSIS ===" -Level 'INFO'
+$multiRoleUsers = @($report | Where-Object { $_.MemberType -eq 'User' } | Group-Object MemberUPN | Where-Object { $_.Count -gt 1 } | Sort-Object Count -Descending)
+if ($multiRoleUsers.Count -gt 0) {
+    Write-Log -Message "Users with multiple admin roles: $($multiRoleUsers.Count)" -Level 'WARNING'
+    foreach ($mu in ($multiRoleUsers | Select-Object -First 20)) {
+        Write-Log -Message "$($mu.Count) roles: $($mu.Name) ($((($mu.Group | Select-Object -ExpandProperty RoleName) -join ', ')))" -Level 'INFO'
+    }
+} else {
+    Write-Log -Message "No users with multiple admin roles." -Level 'SUCCESS'
 }
 
-# Carbon Dark HTML dashboard from the same rows (shared run, no re-query).
-$htmlPath = [System.IO.Path]::ChangeExtension($ExportCSV, '.html')
-$htmlRows = @($ExportResults)
+# Summary
+Write-Log -Message "=== ADMIN ROLE SUMMARY ===" -Level 'INFO'
+$totalAssignments = $report.Count
+$uniqueAdmins = ($report | Where-Object { $_.MemberType -eq 'User' } | Select-Object MemberUPN -Unique).Count
+$globalAdmins = ($report | Where-Object { $_.RoleName -eq 'Global Administrator' -and $_.MemberType -eq 'User' }).Count
+$disabledAdmins = ($report | Where-Object { -not $_.AccountEnabled -and $_.MemberType -eq 'User' }).Count
+$guestAdmins = ($report | Where-Object { $_.IsGuest }).Count
+$spAdmins = ($report | Where-Object { $_.MemberType -eq 'ServicePrincipal' }).Count
+
+Write-Log -Message "Total role assignments    : $totalAssignments" -Level 'INFO'
+Write-Log -Message "Unique admin users        : $uniqueAdmins" -Level 'INFO'
+Write-Log -Message "Global Administrators     : $globalAdmins" -Level 'INFO'
+Write-Log -Message "Disabled with admin role  : $disabledAdmins" -Level 'INFO'
+Write-Log -Message "Guests with admin role    : $guestAdmins" -Level 'INFO'
+Write-Log -Message "Service principal admins  : $spAdmins" -Level 'DEBUG'
+Write-Log -Message "Multi-role users          : $($multiRoleUsers.Count)" -Level 'INFO'
+
+if ($globalAdmins -gt 5) {
+    Write-Log -Message "WARNING: $globalAdmins Global Administrators exceeds Microsoft's recommendation of 2-4." -Level 'ERROR'
+}
+
+$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$csvPath = if ($ExportPath) { $ExportPath } else { Join-Path $scriptDirectory "AdminRoleReport_$stamp.csv" }
+$htmlPath = [System.IO.Path]::ChangeExtension($csvPath, '.html')
+$report | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+
+# Defensive re-collection: $report must survive for the HTML table (Rule 26).
+$htmlRows = @($report)
+if (-not $htmlRows) { $htmlRows = @() }
 $tableRows = foreach ($rowRef in ($htmlRows | Select-Object -First 500)) {
-    $statusBadge = if ("$($rowRef.'Account Status')" -eq 'Disabled') { 'medium' } else { 'low' }
-    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.UPN)") + '</code></td>' +
-    '<td><span class="badge ' + $statusBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Account Status')") + '</span></td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Last Interactive SignIn Date')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Inactive Days(Interactive SignIn)')") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Department)") + '</td>' +
-    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.'Job Title')") + '</td></tr>'
+    $issueBadge = if ($rowRef.Issues -and $rowRef.Issues -ne '-') { 'high' } else { 'low' }
+    '<tr><td><code>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.MemberUPN)") + '</code></td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.RoleName)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.MemberType)") + '</td>' +
+    '<td>' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.AccountEnabled)") + '</td>' +
+    '<td><span class="badge ' + $issueBadge + '">' + [System.Net.WebUtility]::HtmlEncode("$($rowRef.Issues)") + '</span></td></tr>'
 }
-$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) users; full data is in the CSV.</p>" } else { '' }
-$tableHtml = '<div class="section-title">Inactive User Detail</div>' +
-    '<div class="card"><h2>All Users (' + $htmlRows.Count + ')</h2>' +
-    '<table><thead><tr><th>UPN</th><th>Status</th><th>Last Interactive Sign-In</th><th>Inactive Days</th><th>Department</th><th>Job Title</th></tr></thead><tbody>' +
+$tableNote = if ($htmlRows.Count -gt 500) { "<p>Showing 500 of $($htmlRows.Count) assignments; full data is in the CSV.</p>" } else { '' }
+$tableHtml = '<div class="section-title">Admin Role Detail</div>' +
+    '<div class="card"><h2>All Assignments (' + $htmlRows.Count + ')</h2>' +
+    '<table><thead><tr><th>Member</th><th>Role</th><th>Type</th><th>Enabled</th><th>Issues</th></tr></thead><tbody>' +
     ($tableRows -join "`n") + '</tbody></table>' + $tableNote + '</div>'
 
-$disabledCount = @($htmlRows | Where-Object { $_."Account Status" -eq 'Disabled' }).Count
-$neverCount = @($htmlRows | Where-Object { $_."Last Interactive SignIn Date" -eq 'Never Logged In' }).Count
 $kpis = @(
-    @{ value = "$($htmlRows.Count)"; label = 'Users in report'; color = '' },
-    @{ value = "$disabledCount"; label = 'Disabled users'; color = '#f1c21b' },
-    @{ value = "$neverCount"; label = 'Never logged in'; color = '#da1e28' }
+    @{ value = "$totalAssignments"; label = 'Role assignments'; color = '' },
+    @{ value = "$uniqueAdmins"; label = 'Unique admin users'; color = '#0f62fe' },
+    @{ value = "$globalAdmins"; label = 'Global Administrators'; color = '#da1e28' },
+    @{ value = "$disabledAdmins"; label = 'Disabled with admin role'; color = '#da1e28' },
+    @{ value = "$guestAdmins"; label = 'Guests with admin role'; color = '#f1c21b' },
+    @{ value = "$spAdmins"; label = 'Service principal admins'; color = '' }
 )
-Export-StandardHtmlReport -OutputPath $htmlPath -Title 'M365 Inactive User Report' -Subtitle ("Users: $($htmlRows.Count) | Disabled: $disabledCount | Never logged in: $neverCount") `
-    -Body $tableHtml -Kpis $kpis -Version '1.0.0' -ReportName 'M365 Inactive User Report'
+$tenantId = if ($mgContext) { $mgContext.TenantId } else { '' }
+Export-StandardHtmlReport -OutputPath $htmlPath -Title 'Entra Admin Role Report' -Subtitle ("Assignments: $totalAssignments | Global Admins: $globalAdmins | Disabled: $disabledAdmins") `
+    -Tenant $tenantId -Body $tableHtml -Kpis $kpis -Version '1.0.1' -ReportName 'Entra Admin Role Report'
+Write-Log -Message "CSV:  $csvPath ($($report.Count) rows)" -Level 'INFO'
+Write-Log -Message "HTML: $htmlPath" -Level 'INFO'
 
-# Final message
-Write-Log -Message "✅ Script executed successfully. Exported report has $($htmlRows.Count) user(s)." -Level 'SUCCESS'
-Write-Log -Message "📄 CSV:  $ExportCSV" -Level 'WARNING'
-Write-Log -Message "📄 HTML: $htmlPath" -Level 'WARNING'
-Invoke-Item "$ExportCSV"
+# ============================================================================
+# GRAPH PAGINATION (embedded canonical Get-MgGraphAllPages v1.1.0, function only).
+# Follows @odata.nextLink with 429 backoff; uses Invoke-MgGraphRequest.
+# ============================================================================
+
+function Get-MgGraphAllPages {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+        [int]$DelayMs = 100,
+        [hashtable]$Headers = @{},
+        [int]$Max429Retries = 3
+    )
+
+    [System.Collections.Generic.List[PSCustomObject]]$allResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $nextLink = $Uri
+    $requestCount = 0
+    $consecutive429 = 0
+
+    do {
+        try {
+            if ($requestCount -gt 0 -and $DelayMs -gt 0) {
+                Start-Sleep -Milliseconds $DelayMs
+            }
+
+            $params = @{
+                Uri         = $nextLink
+                Method      = 'GET'
+                Headers     = $Headers
+                ErrorAction = 'Stop'
+            }
+
+            $response = Invoke-MgGraphRequest @params
+            $requestCount++
+            $consecutive429 = 0 # Reset throttle counter on success
+
+            if ($null -ne $response.value) {
+                foreach ($item in $response.value) {
+                    $allResults.Add($item)
+                }
+            }
+            else {
+                $allResults.Add($response)
+            }
+
+            $nextLink = $response.'@odata.nextLink'
+
+            if ($requestCount % 10 -eq 0) {
+                Write-Verbose "Processed $requestCount API pages, retrieved $($allResults.Count) items..."
+            }
+        }
+        catch {
+            $is429 = ($_.Exception.Message -like '*429*') -or ($_.Exception.Message -like '*throttled*')
+            if ($is429) {
+                $consecutive429++
+                if ($consecutive429 -gt $Max429Retries) {
+                    throw "Rate limit exceeded (HTTP 429). Maximum retries ($Max429Retries) reached for $nextLink"
+                }
+                # Honor Retry-After header if present, else exponential backoff capped at 60s
+                $retryAfter = $null
+                try {
+                    if ($_.Exception.Response -and $_.Exception.Response.Headers) {
+                        $retryAfter = $_.Exception.Response.Headers['Retry-After']
+                        if (-not $retryAfter) { $retryAfter = $_.Exception.Response.Headers['retry-after'] }
+                    }
+                } catch [System.Exception] {
+                    $retryAfter = $null
+                }
+                $delaySec = if ($retryAfter -and [int]::TryParse($retryAfter.ToString().Split(',')[0], [ref]$null)) { [int]$retryAfter.ToString().Split(',')[0] } else { [Math]::Min(60, [Math]::Pow(2, $consecutive429) * 5) }
+                Write-Warning "Rate limit hit (attempt $consecutive429/$Max429Retries), waiting $delaySec seconds..."
+                Start-Sleep -Seconds $delaySec
+                continue
+            }
+            throw "Error fetching data from $nextLink : $($_.Exception.Message)"
+        }
+    } while ($nextLink)
+
+    return $allResults
+}
 
 # ============================================================================
 # HTML REPORT HELPERS (embedded canonical EnterpriseHtmlReport.template.ps1 v1.0.1).
-# Six functions copied verbatim (Get-StandardHtmlHead/Open/Footer/Close/ChartScripts + Export-StandardHtmlReport);
-# file-level header omitted. IBM Carbon Dark is the only approved HTML design system.
 # ============================================================================
 
 # ============================================================================
