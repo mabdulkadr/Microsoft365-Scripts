@@ -1,54 +1,58 @@
+<div align="center">
 
-# Add Devices to Azure AD Group using PowerShell
+# 💻 Add-DevicesToAzureADGroup
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![PowerShell](https://img.shields.io/badge/powershell-5.1%2B-blue.svg)
-![Version](https://img.shields.io/badge/version-1.0-green.svg)
+**Bulk-add devices to an Entra ID group by device name.**
 
+Resolves names to Device Object IDs first — the step Azure AD's bulk import can't do.
 
-## Overview
+[![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0F172A?style=for-the-badge)](#%EF%B8%8F-requirements)
+[![License](https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge)](#-license)
+[![Version](https://img.shields.io/badge/Version-1.0.0-334155?style=for-the-badge)](#-overview)
 
-This PowerShell script automates the process of **bulk adding devices** to an **Azure AD group** using their **device names**. Since Azure AD’s bulk import feature requires **Device Object IDs instead of Device Names**, this script **retrieves the device IDs dynamically** and adds them to the specified group.
+[Overview](#-overview) • [Features](#-features) • [Usage](#-usage) • [Parameters](#%EF%B8%8F-parameters) • [License](#-license)
 
-### Features
-
-- **Bulk Add Devices**: Processes a CSV file containing device names and adds them to an Azure AD group.
-- **Automated Device Lookup**: Searches Azure AD for each device based on its name.
-- **Handles Duplicate Names**: If multiple devices exist with the same name, all are added.
-- **Error Handling**: Skips devices that cannot be found or already exist in the group.
-- **Azure AD Authentication**: Ensures a valid Azure AD connection before running operations.
+</div>
 
 ---
 
-## Prerequisites
+# 📖 Overview
 
-Before running the script, ensure you have:
-
-1. **PowerShell 5.1+** installed.
-2. **AzureAD PowerShell Module** installed:
-   ```powershell
-   Install-Module AzureAD -Scope CurrentUser
-   ```
-3. **Admin Permissions**: You must have the necessary permissions to read devices and modify Azure AD groups.
-4. **Azure AD Application Permissions** (if running as a service):
-   - `Group.ReadWrite.All`
-   - `Device.Read.All`
-   - `Directory.Read.All`
-5. **A valid CSV file** containing device names.
+**Add-DevicesToAzureADGroup** is a PowerShell script that bulk-adds devices to an Entra ID group from a CSV of device names. Azure AD bulk import needs Device Object IDs, so the script looks each name up dynamically, adds every match (including duplicate names), and skips devices that are missing or already members.
 
 ---
 
-## How to Run
+# ✨ Features
 
-### 1. Running the Script
-Run the script with **group name** and **CSV file path** as parameters:
+* Bulk add from a CSV of device names
+* Automatic Device ID lookup per name
+* Handles duplicate device names (adds all matches)
+* Skips not-found / already-member devices with per-device output
+
+---
+
+# 📂 Project Structure
+
+```text
+Add-DevicesToAzureADGroup
+│
+├── Add-DevicesToAzureADGroup.ps1
+├── SampleDevicesFile.csv
+└── README.md
+```
+
+---
+
+# 🚀 Usage
+
+### Basic Usage
 ```powershell
 .\Add-DevicesToAzureADGroup.ps1 -GroupName "Device Test Group" -InputFile "C:\Scripts\DevicesToAdd.csv"
 ```
 
-### 2. CSV File Format
-Ensure your CSV file follows this format:
-
+### CSV Format
 ```csv
 DeviceName
 Device-01
@@ -56,50 +60,73 @@ Device-02
 Device-03
 ```
 
-Each device name should match the exact name in Azure AD.
+Device names must match Entra ID exactly.
 
 ---
 
-## Script Parameters
+# ⚙️ Parameters
 
-| Parameter   | Description |
-|-------------|-------------|
-| `-GroupName` | The **Azure AD group name** where devices will be added. |
-| `-InputFile` | Path to the **CSV file** containing device names. |
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `GroupName` | String | Yes | — | Target Entra ID group name. |
+| `InputFile` | String | Yes | — | CSV path with a `DeviceName` column. |
 
----
-
-## Output
-
-The script provides real-time output, including:
-
-- **Successfully added** devices.
-- **Devices already in the group** (skipped).
-- **Devices not found** in Azure AD.
-
+### Exit Codes
+| Code | Status |
+| ---- | ------ |
+| 0    | Success |
+| 1    | Failure |
 
 ---
 
-## Notes
+# ⚙️ Requirements
 
-- The script **connects to Azure AD** automatically before execution.
-- Ensure the device names in the CSV file **exactly match** those in Azure AD.
-- Devices **already in the group** will be skipped.
-- If **multiple devices share the same name**, all instances will be added.
+### Operating System
+* Windows 10 / Windows 11
 
----
+### PowerShell
+* PowerShell **5.1 or later**
+* `AzureAD` module (`Install-Module AzureAD -Scope CurrentUser`)
 
-## Reference
-
-This script is sourced from Andrew IT Dev Lab's GitHub repository:
-[**Add Devices to Group in Azure AD**](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group)
+### Permissions
+* Group membership management; app permissions `Group.ReadWrite.All`, `Device.Read.All`, `Directory.Read.All` for service runs.
 
 ---
 
-## License
+# 🛡 Operational Notes
+* Connects to Azure AD automatically before operating.
+* Members already in the group are skipped, not errored.
+* Sample input: `SampleDevicesFile.csv` in this folder.
+* Reference: [Andrew IT Dev Lab — Add Devices to Group in Azure AD](https://github.com/andrewitdevlab/blog-content/tree/main/Azure%20AD/Scripts/Add%20Devices%20to%20Group).
 
+---
+
+## 👤 Author
+
+**Mohammad Abdelkader Omar**
+GitHub: [@mabdulkadr](https://github.com/mabdulkadr)
+Website: [momar.tech](https://momar.tech)
+
+---
+
+## 📜 License
 This project is licensed under the [MIT License](https://opensource.org/licenses/MIT).
 
 ---
 
-**Disclaimer**: This script is provided as-is. Ensure you test it in a non-production environment before using it on live systems.
+## ⚠ Disclaimer
+
+This skill and every script it generates are provided as-is with no warranty of any kind. Test generated tools in a staging environment before deploying to production. The authors assume no liability for any damage or data loss resulting from their use.
+
+---
+<div align="center">
+
+⭐ **If this skill saves you time, star the repo — it helps others find it.**
+
+[Report an Issue](../../issues) · [momar.tech](https://momar.tech)
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/mabdulkadrx)
+
+Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin-skill)
+
+</div>

@@ -1,4 +1,7 @@
-﻿<#
+<#
+.TITLE
+    AzureAD-DeviceGroupManagement - Manage static Azure AD groups for Intune devices
+
 .SYNOPSIS
     Manages static Azure AD groups by adding devices from Intune to these groups.
 
@@ -8,32 +11,63 @@
     and adds devices from Intune to these groups. It ensures that no group exceeds 500 members by distributing devices across available groups
     or creating new ones as needed.
 
-.NOTES
-    - Ensure the script is run with the necessary permissions for Microsoft Graph and Azure AD.
-    - This script manages static groups; it does not handle dynamic group memberships.
-    - Store the App Secret securely and avoid hardcoding sensitive information in scripts.
+.TAGS
+    Identity,M365,Intune
+
+.PLATFORM
+    Windows 10/11/Server 2019+
+
+.PERMISSIONS
+    M365 admin
+
+.AUTHOR
+    AI Generated
+
+.VERSION
+    1.0.0
+
+.CHANGELOG
+    1.0.0 (2026-09-16) - Compliance hardening: canonical rich header + ErrorActionPreference Stop
+
+.LASTUPDATE
+    2026-09-16
 
 .EXAMPLE
     .\AzureAD-DeviceGroupManagement.ps1
+    Groups Intune devices into static groups honoring the 500-member cap.
+
+.EXAMPLE
+    .\AzureAD-DeviceGroupManagement.ps1 -BatchSize 300 -GroupNamePrefix "CorporateDevices-" -EnableLogging
+    Groups devices 300 per group with logging enabled.
 
 .NOTES
-    Author  : Mohammad Abdulkader Omar
-    Website : momar.tech
-    Date    : 2024-11-04
+    Manages static groups only; store the App Secret securely.
+    Default log file: GroupCreationLog.txt beside the script.
+    Exit codes: 0 = success, 1 = failure.
 #>
 
-
+#Requires -Version 5.1
 # Parameters for batch processing and group management
 Param (
     [int]$BatchSize = 500,
     [string]$GroupNamePrefix = "Devices-group",
     [int]$NamePadding = 2,  # Number of digits in group numbering
     [switch]$EnableLogging, # Enable logging to a file
-    [string]$LogFilePath = "C:\CreateStaticGroup\GroupCreationLog.txt"
+    [string]$LogFilePath = "GroupCreationLog.txt"
 )
 
+$ErrorActionPreference = 'Stop'
 
-# Function to log messages with timestamps and color-coded output
+# Anchor relative log paths beside the script (Law 12).
+$scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot } elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath } else { (Get-Location).Path }
+if ($LogFilePath -and -not [System.IO.Path]::IsPathRooted($LogFilePath)) { $LogFilePath = Join-Path $scriptDirectory $LogFilePath }
+
+# ============================================================================
+# LOCAL LOGGER - timestamped, color-coded console lines with optional file log.
+# why: this legacy tool predates the canonical Write-Log block; keep behavior.
+# ============================================================================
+
+# Writes one timestamped, color-coded line to console and optionally to file.
 Function Log-Message {
     param (
         [string]$Message,
@@ -61,34 +95,33 @@ Function Log-Message {
 }
 
 
-
 # Install and Import Microsoft Graph Modules
-Write-Host "Installing Microsoft Graph modules if required (current user scope)" -ForegroundColor Cyan
+Log-Message "Installing Microsoft Graph modules if required (current user scope)" -MessageType "INFO"
 
 # Install Microsoft Graph Authentication Module if not installed
 if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
     try {
         Install-Module -Name Microsoft.Graph.Authentication -Scope CurrentUser -Repository PSGallery -Force
-        Write-Host "Microsoft Graph Authentication Module Installed Successfully" -ForegroundColor Green
+        Log-Message "Microsoft Graph Authentication Module Installed Successfully" -MessageType "SUCCESS"
     } catch {
-        Write-Host "Failed to Install Microsoft Graph Authentication Module: $($_.Exception.Message)" -ForegroundColor Red
+        Log-Message "Failed to Install Microsoft Graph Authentication Module: $($_.Exception.Message)" -MessageType "ERROR"
         exit
     }
 } else {
-    Write-Host "Microsoft Graph Authentication Module Already Installed" -ForegroundColor Green
+    Log-Message "Microsoft Graph Authentication Module Already Installed" -MessageType "SUCCESS"
 }
 
 # Install Microsoft.Graph.Beta.DeviceManagement.Actions if not installed
 if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Beta.DeviceManagement.Actions)) {
     try {
         Install-Module -Name Microsoft.Graph.Beta.DeviceManagement.Actions -Scope CurrentUser -Repository PSGallery -Force
-        Write-Host "Microsoft Graph Beta Device Management Module Installed Successfully" -ForegroundColor Green
+        Log-Message "Microsoft Graph Beta Device Management Module Installed Successfully" -MessageType "SUCCESS"
     } catch {
-        Write-Host "Failed to Install Microsoft Graph Beta Device Management Module: $($_.Exception.Message)" -ForegroundColor Red
+        Log-Message "Failed to Install Microsoft Graph Beta Device Management Module: $($_.Exception.Message)" -MessageType "ERROR"
         exit
     }
 } else {
-    Write-Host "Microsoft Graph Beta Device Management Module Already Installed" -ForegroundColor Green
+    Log-Message "Microsoft Graph Beta Device Management Module Already Installed" -MessageType "SUCCESS"
 }
 
 # Import necessary modules
@@ -102,7 +135,7 @@ Connect-MgGraph -Scopes "DeviceManagementConfiguration.ReadWrite.All"
 # Connect to AzureAD
 Connect-AzureAD
 
-# Function to determine the next group number based on existing groups
+# Computes the next zero-padded group number from existing prefixed names.
 Function Get-NextGroupNumber {
     param (
         [array]$ExistingNames,
@@ -124,7 +157,7 @@ Function Get-NextGroupNumber {
     }
 }
 
-# Function to create a new Azure AD group
+# Creates one static security group; returns the group or $null on failure.
 Function Create-NewGroup {
     param (
         [string]$GroupName
@@ -145,7 +178,7 @@ Function Create-NewGroup {
     }
 }
 
-# Function to add devices to an Azure AD group
+# Adds a device batch to one group, skipping existing members first.
 Function Add-DevicesToGroup {
     param (
         [string]$GroupId,
@@ -186,7 +219,11 @@ Function Add-DevicesToGroup {
 }
 
 
-# Main function to retrieve devices and assign them to groups
+# ============================================================================
+# MAIN - pulls Intune Windows devices and distributes them across prefixed groups.
+# ============================================================================
+
+# Retrieves all Windows devices and assigns them to groups without exceeding the cap.
 Function Get-DevicesAndAssignToGroups {
     Log-Message "Retrieving all Windows PC devices from Microsoft Graph..." -MessageType "INFO"
     try {
@@ -259,19 +296,14 @@ Function Get-DevicesAndAssignToGroups {
             }
         }
 
-        Write-Host "--------------------------------------------------" -ForegroundColor DarkGray
+        Log-Message "--------------------------------------------------" -MessageType "DEBUG"
     }
 
     Log-Message "All groups processed and devices assigned successfully." -MessageType "SUCCESS"
 }
 
 
-
 # Execute the main function
 Get-DevicesAndAssignToGroups
-
-
-
-
 
 
