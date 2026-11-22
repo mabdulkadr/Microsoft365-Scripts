@@ -97,7 +97,7 @@ Get-M365UserLastActivityReport
 
 # 🛡 Operational Notes
 * Prefer MFA/interactive sign-in over `-UserName`/`-Password` + `-NoMFA`.
-* `LastLogonTime` semantics vary by mailbox type — shared/resource mailboxes can mislead; combine with `-UserMailboxOnly`.
+* `LastLogonTime` semantics vary by mailbox type. Shared and resource mailboxes can mislead, so combine with `-UserMailboxOnly`.
 * Large tenants take a while; scope with `-MBNamesFile` for targeted runs.
 
 ---

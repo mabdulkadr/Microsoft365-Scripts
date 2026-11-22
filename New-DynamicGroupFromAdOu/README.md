@@ -28,7 +28,7 @@ Creates one `Devices-<OU>` dynamic group per on-premises OU, targeting devices b
 
 * Discovers all OU names from on-prem AD automatically
 * Creates one dynamic group per OU with a `Devices-` prefix
-* Pre-creation duplicate check — safe to rerun
+* Pre-creation duplicate check makes it safe to rerun
 * Auto-installs required PowerShell modules; secure app-based Graph auth
 
 ---
@@ -92,7 +92,7 @@ This script takes no command-line parameters. All settings live in the configura
 ---
 
 # 🛡 Operational Notes
-* Requires connectivity to **both** on-prem AD and Microsoft Graph — it is a hybrid-only tool.
+* Requires connectivity to **both** on-prem AD and Microsoft Graph, so it is a hybrid-only tool.
 * Never commit real tenant IDs or secrets; replace the checked-in placeholders per environment.
 * CSV-driven variant: [`New-DynamicGroupFromCsv`](../New-DynamicGroupFromCsv/README.md). Single-keyword variant: [`New-DynamicGroupByKeyword`](../New-DynamicGroupByKeyword/README.md).
 

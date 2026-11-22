@@ -91,7 +91,7 @@ Get-GuestUserReport
 # 🛡 Operational Notes
 * Report columns: Display Name, UPN, Email, Company, Invitation/Redemption status, Creation Date, Group Memberships.
 * Review the report to confirm identity and account status before deleting anything.
-* Pair with [`Remove-GuestUsersFromCsv`](../Remove-GuestUsersFromCsv/README.md) for the full audit → remove lifecycle.
+* Pair with [`Remove-GuestUsersFromCsv`](../Remove-GuestUsersFromCsv/README.md) for the full audit and removal lifecycle.
 
 ---
 

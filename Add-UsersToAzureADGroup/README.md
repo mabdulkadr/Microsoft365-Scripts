@@ -20,7 +20,7 @@ Existence-checked, duplicate-safe, throttled against Graph API limits.
 
 # 📖 Overview
 
-**Add-UsersToAzureADGroup** is a PowerShell script that adds users to an Entra ID security group from a CSV of UPNs. Each user is verified to exist, skipped if already a member, and added otherwise — with rate-limiting to avoid API throttling.
+**Add-UsersToAzureADGroup** is a PowerShell script that adds users to an Entra ID security group from a CSV of UPNs. Each user is verified to exist, skipped if already a member, and added otherwise. Calls are rate-limited to avoid API throttling.
 
 ---
 

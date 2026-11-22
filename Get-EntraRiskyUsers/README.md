@@ -20,9 +20,7 @@ Pulls risky users and risk detection events showing risk level, risk state, risk
 
 # 📖 Overview
 
-**Get-EntraRiskyUsers** is a PowerShell reporting script that pulls risky users and risk detection events showing risk level, risk state, risk detail, last detection time, and remediation status. Requires Entra ID P2 for full data.
-
-It queries identityProtection/riskyUsers and riskDetections to surface high, medium, and low risk users with state (atRisk, confirmedCompromised) and recent detections. Use it for SOC triage and risk remediation tracking; requires Entra ID P2.
+**Get-EntraRiskyUsers** is a PowerShell reporting script for risky users and risk detections from Entra ID Protection. It queries identityProtection/riskyUsers and riskDetections to show risk level, state, detail, last detection time, and remediation status, surfacing high, medium, and low risk users with state (atRisk, confirmedCompromised) and recent detections. Use it for SOC triage and risk remediation tracking. It requires Entra ID P2 for full data.
 
 ---
 

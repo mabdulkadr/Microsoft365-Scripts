@@ -20,7 +20,7 @@ One switch-driven script for incident response and offboarding at scale.
 
 # 📖 Overview
 
-**BulkUserResetTool** is a PowerShell script that performs bulk access-control actions in Microsoft 365 via Microsoft Graph: password resets (with optional force-change), session revocation, sign-in blocking, and device disabling — for all users or a targeted list, with exclusions.
+**BulkUserResetTool** is a PowerShell script that performs bulk access-control actions in Microsoft 365 via Microsoft Graph: password resets (with optional force-change), session revocation, sign-in blocking, and device disabling. It can target all users or a specific list, with exclusions.
 
 ---
 

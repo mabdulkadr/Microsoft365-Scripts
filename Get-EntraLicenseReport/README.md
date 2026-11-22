@@ -20,9 +20,7 @@ Lists all license SKUs with assigned versus available counts, identifies users w
 
 # 📖 Overview
 
-**Get-EntraLicenseReport** is a PowerShell reporting script that lists all license SKUs with assigned versus available counts, identifies users with no licenses and disabled accounts still consuming licenses, and calculates utilization rates for optimization.
-
-It pulls subscribed SKUs and user license assignments to show total versus consumed versus available units, then drills into user-level waste (disabled accounts with licenses, unlicensed users, guests with licenses) for optimization and cost review.
+**Get-EntraLicenseReport** is a PowerShell reporting script for Entra ID license utilization and waste. It pulls subscribed SKUs and user license assignments to show assigned, available, total, and consumed units along with utilization rates. It also drills into user-level waste: disabled accounts with licenses, unlicensed users, and guests with licenses. The output supports optimization and cost review.
 
 ---
 

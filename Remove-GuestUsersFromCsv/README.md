@@ -20,13 +20,13 @@ Second half of the guest lifecycle toolkit: [`Get-GuestUserReport`](../Get-Guest
 
 # 📖 Overview
 
-**Remove-GuestUsersFromCsv** is a PowerShell script that bulk-deletes guest accounts from Entra ID using a CSV list. Each row is looked up by `UserPrincipalName`, verified to be a guest (`UserType = Guest`), and only then deleted — member accounts are never touched. A console summary reports deleted / skipped / not-found / failed counts.
+**Remove-GuestUsersFromCsv** is a PowerShell script that bulk-deletes guest accounts from Entra ID using a CSV list. Each row is looked up by `UserPrincipalName`, verified to be a guest (`UserType = Guest`), and only then deleted. Member accounts are never touched. A console summary reports deleted, skipped, not-found, and failed counts.
 
 ---
 
 # ✨ Features
 
-* Interactive file dialog for CSV selection — no hardcoded paths
+* Interactive file dialog for CSV selection, with no hardcoded paths
 * Guest-type verification per row (members are skipped, never deleted)
 * Per-action logging with an end-of-run console summary
 * Sample CSVs included (`exportUsers_2025-7-3.csv`)

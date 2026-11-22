@@ -26,7 +26,7 @@ Interactive CSV picker + group prompt with per-user result logging.
 
 # ✨ Features
 
-* Interactive CSV file picker — no hardcoded input paths
+* Interactive CSV file picker, with no hardcoded input paths
 * Group ID/name prompt at runtime
 * Module check with install prompt for `ExchangeOnlineManagement`
 * Optional run-log export to a location you choose

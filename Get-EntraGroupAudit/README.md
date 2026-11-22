@@ -20,9 +20,7 @@ Provides detailed group analysis including members, direct versus transitive mem
 
 # 📖 Overview
 
-**Get-EntraGroupAudit** is a PowerShell reporting script that provides detailed group analysis including members, direct versus transitive membership, owners, dynamic rules, nested hierarchy, license assignments, and group type classification. Supports single-group deep dive or bulk health audit for empty, large, or ownerless groups.
-
-It supports single-group deep dive (with member listing and owner resolution) and bulk audit mode that flags empty groups, ownerless groups, very large groups, and stale dynamic groups across the tenant.
+**Get-EntraGroupAudit** is a PowerShell reporting script that analyzes Entra ID group membership, ownership, nesting, and configuration. It resolves members, owners, direct versus transitive membership, dynamic rules, nested hierarchy, license assignments, and group type classification. A single-group mode lists members and resolves owners; a bulk mode flags empty, ownerless, very large, and stale dynamic groups across the tenant.
 
 ---
 

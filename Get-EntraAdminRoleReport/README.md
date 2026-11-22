@@ -20,9 +20,7 @@ Lists all directory role assignments showing who has which admin roles, assignme
 
 # 📖 Overview
 
-**Get-EntraAdminRoleReport** is a PowerShell reporting script that lists all directory role assignments showing who has which admin roles, assignment permanence versus PIM eligibility, stale admin sign-ins, and users with multiple admin roles for privileged access review.
-
-It pulls role definitions, role assignments, and user sign-in activity to surface permanent versus eligible assignments, dormant admin accounts, and multi-role users. Use it for privileged access reviews and PIM hygiene.
+**Get-EntraAdminRoleReport** is a PowerShell reporting script for Entra ID admin role assignments. It pulls role definitions, role assignments, and user sign-in activity to show who holds each admin role, which assignments are permanent versus PIM-eligible, which admin accounts have stale sign-ins, and which users hold multiple roles. Use it for privileged access reviews and PIM hygiene.
 
 ---
 

@@ -26,7 +26,7 @@ Fully unattended variant of the device group manager — authenticates with Tena
 
 # ✨ Features
 
-* App-only Graph connection (Tenant ID / App ID / App Secret) — scheduler-friendly
+* App-only Graph connection (Tenant ID / App ID / App Secret) suits scheduled runs
 * Prefix-based group discovery with automatic overflow group creation
 * Configurable batch size and zero-padded group numbering
 * Optional file logging with `[timestamp] [LEVEL]` lines
@@ -91,7 +91,7 @@ AzureAD-DeviceGroupManagement-AppAuth
 ---
 
 # 🛡 Operational Notes
-* Manages **static** memberships only — no dynamic rules.
+* Manages **static** memberships only, with no dynamic rules.
 * Store the App Secret securely (Key Vault / Secret Store); never commit real secrets.
 * For the interactive variant see [`AzureAD-DeviceGroupManagement`](../AzureAD-DeviceGroupManagement/README.md).
 

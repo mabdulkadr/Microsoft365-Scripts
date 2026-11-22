@@ -20,9 +20,7 @@ Lists all guest users and flags never signed in, inactive for the configured win
 
 # 📖 Overview
 
-**Get-EntraGuestUserAudit** is a PowerShell reporting script that lists all guest users and flags never signed in, inactive for the configured window, group memberships, and invitation status to support external access review and cleanup.
-
-It enumerates guest users with sign-in activity, group memberships, and externalUserState to surface never-signed-in guests, 90+ day inactive guests, and pending invitations for access review and offboarding.
+**Get-EntraGuestUserAudit** is a PowerShell reporting script for external and guest users in Entra ID. It enumerates guest users with sign-in activity, group memberships, and externalUserState, flagging never-signed-in guests, guests inactive beyond the configured window (90 days by default), and pending invitations for access review and offboarding.
 
 ---
 

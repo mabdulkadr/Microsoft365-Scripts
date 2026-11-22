@@ -20,7 +20,7 @@ Interactive + non-interactive sign-in aging with enabled/disabled/external/never
 
 # 📖 Overview
 
-**GetM365InactiveUserReport** is a PowerShell script that reports inactive Microsoft 365 users from Microsoft Graph sign-in activity. It ages both interactive and non-interactive sign-ins, slices by account state, and exports UTF-8 CSV beside the script. Scheduler-friendly for automated hygiene runs.
+**GetM365InactiveUserReport** is a PowerShell script that reports inactive Microsoft 365 users from Microsoft Graph sign-in activity. It ages both interactive and non-interactive sign-ins, slices by account state, and exports UTF-8 CSV beside the script. The script fits scheduled hygiene runs.
 
 ---
 

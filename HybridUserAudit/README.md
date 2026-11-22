@@ -20,7 +20,7 @@ Username-joined attributes, dual last-logons, CSV + log output for audit and com
 
 # 📖 Overview
 
-**HybridUserAudit** is a PowerShell script that merges on-premises Active Directory and Entra ID user data on username, tracks login activity from both sides, and writes a UTF-8 CSV for auditing, compliance, or inventory. Read-only — it never modifies users.
+**HybridUserAudit** is a PowerShell script that merges on-premises Active Directory and Entra ID user data on username, tracks login activity from both sides, and writes a UTF-8 CSV for auditing, compliance, or inventory. It is read-only and never modifies users.
 
 ---
 
@@ -57,9 +57,9 @@ HybridUserAudit
 This script takes no command-line parameters; run it from an elevated 5.1 session (ISE recommended).
 
 ### Outputs
-* **CSV** `Reports\FullUserReport_yyyy-MM-dd_HH-mm.csv` (beside the script) — Username, DisplayName, Department, Title, Email, InAD/InEntraID, AD_/Entra_ Enabled/Created, AD_LastLogon, Entra_LastInteractiveSignIn, AD_WhenChanged, AD_PwdLastSet, AD_Description, AD_DistinguishedName
-* **HTML** `Reports\FullUserReport_yyyy-MM-dd_HH-mm.html` — Carbon Dark dashboard (KPIs + detail table, same rows)
-* **Log** `Reports\HybridUserAuditLog_yyyy-MM-dd_HH-mm.txt` (beside the script)
+* CSV `Reports\FullUserReport_yyyy-MM-dd_HH-mm.csv` (beside the script): Username, DisplayName, Department, Title, Email, InAD/InEntraID, AD_/Entra_ Enabled/Created, AD_LastLogon, Entra_LastInteractiveSignIn, AD_WhenChanged, AD_PwdLastSet, AD_Description, AD_DistinguishedName
+* HTML `Reports\FullUserReport_yyyy-MM-dd_HH-mm.html`: Carbon Dark dashboard (KPIs + detail table, same rows)
+* Log `Reports\HybridUserAuditLog_yyyy-MM-dd_HH-mm.txt` (beside the script)
 
 ### Exit Codes
 | Code | Status |
@@ -84,7 +84,7 @@ This script takes no command-line parameters; run it from an elevated 5.1 sessio
 ---
 
 # 🛡 Operational Notes
-* Read-only by design — safe to run in production, but allow several minutes on large directories.
+* Read-only by design, so it is safe to run in production, but allow several minutes on large directories.
 * UTF-8 export preserves non-Latin attributes.
 
 ---

@@ -6,12 +6,14 @@
 
 28 tools across 6 domains — every tool lives in its own folder with its script and README.
 
+[![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0F172A?style=for-the-badge)](#%EF%B8%8F-requirements)
-[![License](https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge)](#-license)
 [![Tools](https://img.shields.io/badge/Tools-28%20Tools-10B981?style=for-the-badge)](#-tool-catalog)
+[![License](https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge)](#-license)
+[![Version](https://img.shields.io/badge/Version-1.0.0-334155?style=for-the-badge)](#-overview)
 
-[Catalog](#-tool-catalog) • [Layout](#-layout) • [Requirements](#%EF%B8%8F-requirements) • [License](#-license)
+[Overview](#-overview) • [Features](#-core-features) • [Catalog](#-tool-catalog) • [Structure](#-project-structure) • [Requirements](#%EF%B8%8F-requirements) • [License](#-license)
 
 </div>
 
@@ -19,7 +21,15 @@
 
 # 📖 Overview
 
-**Microsoft365-Scripts** is a collection of production-grade PowerShell CLI tools for Microsoft 365 and Entra ID operations: reporting, auditing, group management, guest lifecycle, licensing, and bulk administration. Each tool is self-contained (script + README) and follows the same conventions: canonical headers, structured logging, beside-the-script reports, and PS 5.1 compatibility.
+Microsoft365-Scripts is a set of 28 PowerShell tools for Microsoft 365 and Entra ID work: reporting, auditing, group management, guest lifecycle, licensing, and bulk administration. Each tool has its own folder with a script and README, and all of them use the same header, logging, and report layout. They run on PowerShell 5.1.
+
+---
+
+# ✨ Core Features
+
+* 28 self-contained CLI tools across six Microsoft 365 and Entra ID domains
+* A canonical header, structured logging, and reports written beside the script in every tool
+* Shared conventions across the collection keep behavior consistent between tools
 
 ---
 
@@ -85,7 +95,7 @@
 
 ---
 
-# 📂 Layout
+# 📂 Project Structure
 
 ```text
 Microsoft365-Scripts
@@ -114,9 +124,9 @@ Every tool folder contains its script plus its own README with parameters, exit 
 ---
 
 # 🛡 Operational Notes
-* Test every tool in staging before production — see each README's Disclaimer.
-* Guest lifecycle order: `Get-GuestUserReport` (audit) → `Remove-GuestUsersFromCsv` (remove).
-* Dynamic-group variants: CSV bulk, single keyword, or on-prem OU mirror — pick one per need.
+* Test every tool in staging before production, as described in each README's Disclaimer.
+* Guest lifecycle order: `Get-GuestUserReport` (audit), then `Remove-GuestUsersFromCsv` (remove).
+* Dynamic-group variants: CSV bulk, single keyword, or on-prem OU mirror. Pick the one that fits the task.
 
 ---
 

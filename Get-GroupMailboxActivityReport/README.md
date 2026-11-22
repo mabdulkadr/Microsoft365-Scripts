@@ -103,7 +103,7 @@ This script takes no command-line parameters. Targets, credentials, SMTP, and ou
 
 # 🛡 Operational Notes
 * For large groups lower concurrency or run off-hours to avoid throttling.
-* `LastLogonTime` semantics vary (shared/resource mailboxes, background access) — interpret counts accordingly.
+* `LastLogonTime` semantics vary (shared/resource mailboxes, background access), so interpret counts accordingly.
 * Protect the certificate private key and SMTP credentials (Key Vault / Secret Store).
 * Module install if missing: `Install-Module ExchangeOnlineManagement, AzureAD -Scope CurrentUser` (plus NuGet provider / trusted PSGallery first).
 * Docs: [Exchange Online PowerShell](https://learn.microsoft.com/powershell/exchange/exchange-online-powershell) · [Get-MailboxStatistics](https://learn.microsoft.com/powershell/module/exchange/get-mailboxstatistics) · [SMTP AUTH](https://learn.microsoft.com/exchange/clients-and-mobile-in-exchange-online/authenticated-client-smtp-submission).

@@ -82,7 +82,7 @@ Invoke-M365LicenseReport
 ---
 
 # 🛡 Operational Notes
-* `-outpath` is mandatory — the folder is created if missing.
+* `-outpath` is mandatory; the folder is created if missing.
 * Reclaim licenses surfaced in the waste section before buying more seats.
 * For a per-user license matrix instead, see [`Get-EntraLicenseReport`](../Get-EntraLicenseReport/README.md).
 

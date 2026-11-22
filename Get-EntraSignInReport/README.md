@@ -20,9 +20,9 @@ This script pulls recent sign-in logs from Microsoft Graph and reports failed si
 
 # 📖 Overview
 
-**Get Entra Sign-In Report** is a PowerShell reporting script that Pulls recent sign-in logs and reports failed sign-ins, MFA failures, legacy authentication usage, conditional access failures, sign-ins from unusual locations, top failing users, and top failing apps. Essential for security audits and incident investigation. Requires Entra ID P1/P2 for sign-in log access; data retained 30 days maximum. It runs from a workstation via Microsoft Graph and writes structured logs for every operation.
+**Get Entra Sign-In Report** is a PowerShell reporting script that pulls recent sign-in logs and reports failed sign-ins, MFA failures, legacy authentication usage, conditional access failures, sign-ins from unusual locations, top failing users, and top failing apps. It runs from a workstation via Microsoft Graph, needs no agent deployment, and writes structured logs for every operation. Use it for security audits and incident investigation. Requires Entra ID P1/P2 for sign-in log access; data is retained for 30 days maximum.
 
-It is part of the **Intune Reporting Tools** category and runs from a workstation — no agent deployment required.
+It belongs to the **Intune Reporting Tools** category.
 
 ---
 
@@ -99,7 +99,7 @@ Last 7 days including successes
 # 🛡 Operational Notes
 * Requires Entra ID P1/P2 for sign-in log access; retention is 30 days maximum.
 * Filtering by Hours and IncludeSuccessful controls result volume; large windows may hit Graph throttling.
-* Test in a staging tenant first; Graph permission errors surface as 403 — check Entra consent for the listed scopes.
+* Test in a staging tenant first; Graph permission errors surface as 403, so check Entra consent for the listed scopes.
 
 ---
 

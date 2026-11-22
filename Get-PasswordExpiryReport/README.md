@@ -99,7 +99,7 @@ Get-PasswordExpiryReport
 # 🛡 Operational Notes
 * Combine switches to narrow scope, e.g. `-PwdExpired -LicensedUserOnly -EnabledUsersOnly`.
 * For unattended runs, supply `TenantId` + `ClientId` + `CertificateThumbprint`.
-* Treat expiry exports as sensitive — they enumerate account hygiene tenant-wide.
+* Treat expiry exports as sensitive, since they enumerate account hygiene tenant-wide.
 
 ---
 

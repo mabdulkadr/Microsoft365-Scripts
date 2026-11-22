@@ -20,7 +20,7 @@ Mode-CLI Windows-Scripts toolkit for endpoint management, helpdesk, and IT opera
 
 # 📖 Overview
 
-**Get-M365UserActivityReport** is a PowerShell CLI tool in the **Identity-Access** category of the **Windows-Scripts** enterprise toolkit. Connects to Exchange Online and prints mailbox statistics for the supplied mailboxes.
+**Get-M365UserActivityReport** is a PowerShell CLI tool in the Identity-Access category of the Windows-Scripts enterprise toolkit. It connects to Exchange Online and prints mailbox statistics for the supplied mailboxes.
 
 **Category:** `Identity-Access`
 **Script:** `Get-M365UserActivityReport.ps1`
@@ -31,12 +31,12 @@ Mode-CLI Windows-Scripts toolkit for endpoint management, helpdesk, and IT opera
 # ✨ Features
 
 * Report Exchange Online last-logon time per mailbox
-* **Canonical logging** — dot-sources `scripts/Write-Log.ps1` (single source of truth: `Initialize-Log`, `Write-Banner`, `Write-Log`, `Finish-Script`)
-* **Graceful elevation** — detects privilege level at runtime via `Test-IsElevated` and degrades with a WARNING log instead of hard-failing
-* **Structured per-target results** — every action returns a `PSCustomObject` with `Target / Success / Skipped / Error` fields so MAIN can aggregate with `Measure-Object`
-* **Supports `-WhatIf`** via `[CmdletBinding(SupportsShouldProcess = True)]`
-* **Canonical exit codes** — `0 = success / 1 = failure / 2 = script error` (Intune-compliant)
-* **Per-script README** documenting parameters, exit codes, and operational notes
+* Canonical logging: dot-sources `scripts/Write-Log.ps1` (single source of truth: `Initialize-Log`, `Write-Banner`, `Write-Log`, `Finish-Script`)
+* Graceful elevation: detects privilege level at runtime via `Test-IsElevated` and degrades with a WARNING log instead of hard-failing
+* Structured per-target results: every action returns a `PSCustomObject` with `Target / Success / Skipped / Error` fields so MAIN can aggregate with `Measure-Object`
+* Supports `-WhatIf` via `[CmdletBinding(SupportsShouldProcess = True)]`
+* Canonical exit codes: `0 = success / 1 = failure / 2 = script error` (Intune-compliant)
+* Per-script README documenting parameters, exit codes, and operational notes
 
 ---
 
@@ -94,11 +94,11 @@ Get-Help .\Get-M365UserActivityReport.ps1 -Examples
 
 # ⚙️ Requirements
 
-* **OS:** Windows 10/11/Server 2019+
-* **PowerShell:** 5.1 or later (`#Requires -Version 5.1`)
-* **Permissions:** M365 admin
-* **Modules:** ExchangeOnlineManagement (auto-installed if missing)
-* **Logging:** Dot-sources `scripts/Write-Log.ps1` (5 levels: DEBUG / INFO / SUCCESS / WARNING / ERROR)
+* OS: Windows 10/11/Server 2019+
+* PowerShell: 5.1 or later (`#Requires -Version 5.1`)
+* Permissions: M365 admin
+* Modules: ExchangeOnlineManagement (auto-installed if missing)
+* Logging: dot-sources `scripts/Write-Log.ps1` (5 levels: DEBUG / INFO / SUCCESS / WARNING / ERROR)
 
 ---
 
@@ -108,7 +108,7 @@ Get-Help .\Get-M365UserActivityReport.ps1 -Examples
 * Elevation is detected at runtime via `Test-IsElevated`; the script logs a warning and degrades gracefully when not elevated.
 * Each per-target result is returned as a structured `PSCustomObject` with `Target / Success / Skipped / Error` fields, aggregated in MAIN.
 * Log files are written to `C:\ProgramData\Get-M365UserActivityReport\Logs\` (`[yyyy-MM-dd HH:mm:ss] [Level] message` lines).
-* Re-running the script is **idempotent** — it produces the same end state.
+* Re-running the script is idempotent and produces the same end state.
 
 ---
 

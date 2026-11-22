@@ -20,9 +20,7 @@ Queries Microsoft Graph to retrieve all Conditional Access policies and expands 
 
 # 📖 Overview
 
-**Get-EntraCAReport** is a PowerShell reporting script that queries Microsoft Graph to retrieve all Conditional Access policies and expands them into a readable report with state, user and group targets, application targets, platform and location conditions, grant controls, and session controls for security auditing and change review.
-
-It resolves group and app IDs to display names, expands conditions and grant/session controls, and supports filtering by name and state. Use it for security audits, documentation, and change-review evidence.
+**Get-EntraCAReport** is a PowerShell reporting script for Conditional Access policies. It queries Microsoft Graph and expands each policy into a readable report covering state, user and group targets, application targets, platform and location conditions, grant controls, and session controls. The script resolves group and app IDs to display names and supports filtering by name and state. Use it for security audits, documentation, and change-review evidence.
 
 ---
 

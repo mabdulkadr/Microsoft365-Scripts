@@ -20,9 +20,7 @@ Pulls directory audit logs showing recent changes for users, groups, application
 
 # 📖 Overview
 
-**Get-EntraDirectoryAudit** is a PowerShell reporting script that pulls directory audit logs showing recent changes for users, groups, applications, role assignments, and Conditional Access policies with actor details and timestamps for governance review.
-
-It queries the Graph auditLogs/directoryAudits endpoint with a configurable lookback window and category filter, then expands each audit entry with actor, target, and result for governance and change-tracking.
+**Get-EntraDirectoryAudit** is a PowerShell reporting script for recent Entra ID directory changes. It queries the Graph auditLogs/directoryAudits endpoint with a configurable lookback window and category filter, then expands each entry with its actor, target, and result. Coverage includes users, groups, applications, role assignments, and Conditional Access policies. Use it for governance review and change tracking.
 
 ---
 

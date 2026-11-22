@@ -20,7 +20,7 @@ Single-group variant for device fleets that follow a naming convention (e.g. `it
 
 # 📖 Overview
 
-**New-DynamicGroupByKeyword** is a PowerShell script that creates a single dynamic Entra ID group whose membership rule targets devices whose display name contains a keyword (default `it-op`). Ideal for Intune/Entra ID environments where devices follow a naming convention.
+**New-DynamicGroupByKeyword** is a PowerShell script that creates a single dynamic Entra ID group whose membership rule targets devices whose display name contains a keyword (default `it-op`). It suits Intune and Entra ID environments where devices follow a naming convention.
 
 ---
 
@@ -29,7 +29,7 @@ Single-group variant for device fleets that follow a naming convention (e.g. `it
 * Creates one dynamic group with a keyword-based membership rule
 * App-based (service principal) Graph authentication with secure credential handling
 * Structured error management with a creation summary
-* No duplicate handling needed — single-shot, single-group flow
+* No duplicate handling is needed because the flow creates one group in one run
 
 ---
 

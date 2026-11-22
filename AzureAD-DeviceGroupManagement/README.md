@@ -97,8 +97,8 @@ AzureAD-DeviceGroupManagement
 ---
 
 # 🛡 Operational Notes
-* Manages **static** memberships only — no dynamic rules.
-* Store the App Secret securely; avoid hardcoding sensitive data — prefer Key Vault / Secret Store.
+* Manages **static** memberships only, with no dynamic rules.
+* Store the App Secret securely; avoid hardcoding sensitive data and prefer Key Vault or Secret Store.
 * Unattended app-only variant: [`AzureAD-DeviceGroupManagement-AppAuth`](../AzureAD-DeviceGroupManagement-AppAuth/README.md).
 
 ---

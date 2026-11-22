@@ -20,9 +20,7 @@ Lists all app registrations and flags expiring or expired secrets and certificat
 
 # 📖 Overview
 
-**Get-EntraAppRegistrationAudit** is a PowerShell reporting script that lists all app registrations and flags expiring or expired secrets and certificates, excessive API permissions, missing owners, stale sign-ins, and multi-tenant apps for security hygiene review.
-
-It inventories app registrations, service principals, and credential metadata to surface hygiene gaps — expired or soon-to-expire secrets, over-privileged apps, ownerless apps, and multi-tenant risks. Ideal for quarterly app hygiene reviews.
+**Get-EntraAppRegistrationAudit** is a PowerShell reporting script for Entra ID app registrations. It inventories app registrations, service principals, and credential metadata, flagging expired or soon-to-expire secrets and certificates, excessive API permissions, missing owners, stale sign-ins, and multi-tenant apps. Use it for quarterly app hygiene reviews.
 
 ---
 
@@ -102,7 +100,7 @@ Audits with a 90-day expiry window.
 # 🛡 Operational Notes
 * Read-only; never modifies app registrations.
 * Credential expiry is evaluated in tenant local time; verify with Entra portal.
-* Permission analysis is heuristic — review high-privilege apps manually.
+* Permission analysis is heuristic, so review high-privilege apps manually.
 
 ---
 
