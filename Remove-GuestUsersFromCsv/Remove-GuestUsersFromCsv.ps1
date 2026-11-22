@@ -1,6 +1,6 @@
 <#
 .TITLE
-    Remove-GuestUsersFromCSV - Bulk delete guest users from Entra ID using a CSV list
+    Remove-GuestUsersFromCsv - Bulk delete guest users from Entra ID using a CSV list
 
 .SYNOPSIS
     Bulk deletes guest users from Microsoft Entra ID based on a provided CSV list.
@@ -34,11 +34,11 @@
     2026-09-16
 
 .EXAMPLE
-    .\Remove-GuestUsersFromCSV.ps1
+    .\Remove-GuestUsersFromCsv.ps1
     Runs the script and prompts to choose the CSV file.
 
 .EXAMPLE
-    Get-Help .\Remove-GuestUsersFromCSV.ps1 -Full
+    Get-Help .\Remove-GuestUsersFromCsv.ps1 -Full
     Shows the required CSV schema (UserPrincipalName) and safety checks.
 
 .NOTES
@@ -55,7 +55,7 @@ $ErrorActionPreference = 'Stop'
 # CONFIGURATION - solution identity for the embedded logging block.
 # ============================================================================
 
-$SolutionName = 'Remove-GuestUsersFromCSV'
+$SolutionName = 'Remove-GuestUsersFromCsv'
 $ScriptMode   = 'run'
 
 # ============================================================================

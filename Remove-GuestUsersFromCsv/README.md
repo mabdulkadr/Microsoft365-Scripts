@@ -38,7 +38,7 @@ Second half of the guest lifecycle toolkit: [`Get-GuestUserReport`](../Get-Guest
 ```text
 Remove-GuestUsersFromCsv
 │
-├── Remove-GuestUsersFromCSV.ps1
+├── Remove-GuestUsersFromCsv.ps1
 ├── sample-guests.csv
 └── README.md
 ```
@@ -49,7 +49,7 @@ Remove-GuestUsersFromCsv
 
 ### Basic Usage
 ```powershell
-.\Remove-GuestUsersFromCSV.ps1
+.\Remove-GuestUsersFromCsv.ps1
 ```
 
 ### How It Works

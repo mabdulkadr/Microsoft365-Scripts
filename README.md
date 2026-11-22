@@ -105,7 +105,7 @@ Microsoft365-Scripts
 │   ├── Get-EntraAdminRoleReport.ps1
 │   └── README.md
 ├── Remove-GuestUsersFromCsv/
-│   ├── Remove-GuestUsersFromCSV.ps1
+│   ├── Remove-GuestUsersFromCsv.ps1
 │   ├── sample-guests.csv
 │   └── README.md
 └── … (one folder per tool, same shape)
