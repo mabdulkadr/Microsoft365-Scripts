@@ -29,7 +29,7 @@ Second half of the guest lifecycle toolkit: [`Get-GuestUserReport`](../Get-Guest
 * Interactive file dialog for CSV selection, with no hardcoded paths
 * Guest-type verification per row (members are skipped, never deleted)
 * Per-action logging with an end-of-run console summary
-* Sample CSVs included (`exportUsers_2025-7-3.csv`)
+* A sample CSV with fictional guest accounts (`sample-guests.csv`)
 
 ---
 
@@ -39,8 +39,7 @@ Second half of the guest lifecycle toolkit: [`Get-GuestUserReport`](../Get-Guest
 Remove-GuestUsersFromCsv
 │
 ├── Remove-GuestUsersFromCSV.ps1
-├── exportUsers_2025-7-3.csv
-├── exportUsers_2025-7-3-IT-OP-030.csv
+├── sample-guests.csv
 └── README.md
 ```
 
@@ -61,8 +60,8 @@ Remove-GuestUsersFromCsv
 ### CSV Format
 ```csv
 DisplayName,UserPrincipalName
-admin,admin_upm.xyz.com#EXT#@contoso.onmicrosoft.com
-000000000,000000000_contoso.com#EXT#@contoso.onmicrosoft.com
+user,user_upm.contoso.com#EXT#@contoso.onmicrosoft.com
+seconduser,seconduser_contoso.com#EXT#@contoso.onmicrosoft.com
 ```
 
 ---

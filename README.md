@@ -106,7 +106,7 @@ Microsoft365-Scripts
 │   └── README.md
 ├── Remove-GuestUsersFromCsv/
 │   ├── Remove-GuestUsersFromCSV.ps1
-│   ├── exportUsers_2025-7-3.csv
+│   ├── sample-guests.csv
 │   └── README.md
 └── … (one folder per tool, same shape)
 ```
