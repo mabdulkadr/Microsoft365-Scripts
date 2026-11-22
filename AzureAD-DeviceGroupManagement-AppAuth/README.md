@@ -38,7 +38,7 @@ Fully unattended variant of the device group manager — authenticates with Tena
 ```text
 AzureAD-DeviceGroupManagement-AppAuth
 │
-├── AzureAD-DeviceGroupManagement-AppAuth.ps1
+├── Add-IntuneDevicesToStaticGroupAppOnly.ps1
 └── README.md
 ```
 
@@ -48,12 +48,12 @@ AzureAD-DeviceGroupManagement-AppAuth
 
 ### Basic Usage
 ```powershell
-.\AzureAD-DeviceGroupManagement-AppAuth.ps1
+.\Add-IntuneDevicesToStaticGroupAppOnly.ps1
 ```
 
 ### With Parameters
 ```powershell
-.\AzureAD-DeviceGroupManagement-AppAuth.ps1 -BatchSize 300 -GroupNamePrefix "CorporateDevices-" -NamePadding 3 -EnableLogging -LogFilePath "D:\Logs\DeviceGroups.log"
+.\Add-IntuneDevicesToStaticGroupAppOnly.ps1 -BatchSize 300 -GroupNamePrefix "CorporateDevices-" -NamePadding 3 -EnableLogging -LogFilePath "D:\Logs\DeviceGroups.log"
 ```
 
 ---
@@ -123,6 +123,6 @@ This skill and every script it generates are provided as-is with no warranty of 
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/mabdulkadrx)
 
-Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin-skill)
+Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin)
 
 </div>

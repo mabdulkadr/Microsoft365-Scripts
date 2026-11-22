@@ -4,7 +4,7 @@
 
 **Report Exchange Online last-logon time per mailbox**
 
-Mode-CLI Windows-Scripts toolkit for endpoint management, helpdesk, and IT operations.
+Mode-CLI Windows-Endpoint-Scripts toolkit for endpoint management, helpdesk, and IT operations.
 
 [![Mode](https://img.shields.io/badge/Mode-CLI-334155?style=for-the-badge)](#-usage)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?style=for-the-badge&logo=powershell&logoColor=white)](https://learn.microsoft.com/en-us/powershell/)
@@ -20,7 +20,7 @@ Mode-CLI Windows-Scripts toolkit for endpoint management, helpdesk, and IT opera
 
 # 📖 Overview
 
-**Get-M365UserActivityReport** is a PowerShell CLI tool in the Identity-Access category of the Windows-Scripts enterprise toolkit. It connects to Exchange Online and prints mailbox statistics for the supplied mailboxes.
+**Get-M365UserActivityReport** is a PowerShell CLI tool in the Identity-Access category of the Windows-Endpoint-Scripts enterprise toolkit. It connects to Exchange Online and prints mailbox statistics for the supplied mailboxes.
 
 **Category:** `Identity-Access`
 **Script:** `Get-M365UserActivityReport.ps1`
@@ -140,6 +140,6 @@ This skill and every script it generates are provided as-is with no warranty of 
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/mabdulkadrx)
 
-Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin-skill)
+Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin)
 
 </div>

@@ -38,7 +38,7 @@ Prefix-based discovery, overflow groups, batched assignment — with manual sign
 ```text
 AzureAD-DeviceGroupManagement
 │
-├── AzureAD-DeviceGroupManagement.ps1
+├── Add-IntuneDevicesToStaticGroup.ps1
 └── README.md
 ```
 
@@ -48,12 +48,12 @@ AzureAD-DeviceGroupManagement
 
 ### Basic Usage
 ```powershell
-.\AzureAD-DeviceGroupManagement.ps1
+.\Add-IntuneDevicesToStaticGroup.ps1
 ```
 
 ### With Parameters
 ```powershell
-.\AzureAD-DeviceGroupManagement.ps1 -BatchSize 300 -GroupNamePrefix "CorporateDevices-" -NamePadding 3 -EnableLogging -LogFilePath "D:\Logs\AzureADGroupManagement.log"
+.\Add-IntuneDevicesToStaticGroup.ps1 -BatchSize 300 -GroupNamePrefix "CorporateDevices-" -NamePadding 3 -EnableLogging -LogFilePath "D:\Logs\AzureADGroupManagement.log"
 ```
 
 ---
@@ -129,6 +129,6 @@ This skill and every script it generates are provided as-is with no warranty of 
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/mabdulkadrx)
 
-Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin-skill)
+Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin)
 
 </div>

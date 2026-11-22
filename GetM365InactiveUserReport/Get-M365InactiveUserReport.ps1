@@ -1,6 +1,6 @@
 <#
 .TITLE
-    GetM365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
+    Get-M365InactiveUserReport - Report inactive Microsoft 365 users via Microsoft Graph
 
 .SYNOPSIS
     This script generates a report of inactive Microsoft 365 users based on sign-in activities using Microsoft Graph PowerShell.
@@ -35,11 +35,11 @@
     2026-09-16
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -InactiveDays 90
+    .\Get-M365InactiveUserReport.ps1 -InactiveDays 90
     Runs an inactivity report for users inactive more than 90 days.
 
 .EXAMPLE
-    .\GetM365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
+    .\Get-M365InactiveUserReport.ps1 -ReturnNeverLoggedInUser -EnabledUsersOnly
     Lists enabled users who never logged in (provisioning cleanup).
 
 .NOTES

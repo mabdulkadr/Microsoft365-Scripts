@@ -1,6 +1,6 @@
 <#
 .TITLE
-    HybridUserAudit - Full hybrid user audit from Active Directory and Entra ID
+    Get-HybridUserAuditReport - Full hybrid user audit from Active Directory and Entra ID
 
 .SYNOPSIS
     Generates a full hybrid user audit report from Active Directory and Microsoft Entra ID.
@@ -39,11 +39,11 @@
     2026-09-16
 
 .EXAMPLE
-    .\HybridUserAudit.ps1
+    .\Get-HybridUserAuditReport.ps1
     Runs the full hybrid user audit and writes the CSV report.
 
 .EXAMPLE
-    Get-Help .\HybridUserAudit.ps1 -Full
+    Get-Help .\Get-HybridUserAuditReport.ps1 -Full
     Shows output column definitions and log file locations.
 
 .NOTES

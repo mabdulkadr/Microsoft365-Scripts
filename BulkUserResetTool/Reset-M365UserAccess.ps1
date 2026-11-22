@@ -1,9 +1,9 @@
 <#
 .TITLE
-    BulkUserResetTool - Reset passwords, disable devices, sign out sessions, block sign-in
+    Reset-M365UserAccess - Reset passwords, disable devices, sign out sessions, block sign-in
 
 .SYNOPSIS
-    BulkUserResetTool.ps1
+    Reset-M365UserAccess.ps1
 
 .DESCRIPTION
     Performs bulk access-control actions against Entra ID users via Microsoft Graph:
@@ -37,11 +37,11 @@
     2026-09-16
 
 .EXAMPLE
-    .\BulkUserResetTool.ps1 -All -ResetPassword
+    .\Reset-M365UserAccess.ps1 -All -ResetPassword
     Resets passwords for all users.
 
 .EXAMPLE
-    .\BulkUserResetTool.ps1 -UserPrincipalNames user@contoso.com -SignOut -BlockSignIn
+    .\Reset-M365UserAccess.ps1 -UserPrincipalNames user@contoso.com -SignOut -BlockSignIn
     Signs out sessions and blocks sign-in for the named user.
 
 .NOTES

@@ -38,7 +38,7 @@ One switch-driven script for incident response and offboarding at scale.
 ```text
 BulkUserResetTool
 │
-├── BulkUserResetTool.ps1
+├── Reset-M365UserAccess.ps1
 └── README.md
 ```
 
@@ -48,14 +48,14 @@ BulkUserResetTool
 
 ### Basic Usage
 ```powershell
-.\BulkUserResetTool.ps1 -All -SignOut -BlockSignIn
+.\Reset-M365UserAccess.ps1 -All -SignOut -BlockSignIn
 ```
 
 ### With Parameters
 ```powershell
-.\BulkUserResetTool.ps1 -UserPrincipalNames user1@domain.com, user2@domain.com -ResetPassword
-.\BulkUserResetTool.ps1 -All -DisableDevices -SignOut
-.\BulkUserResetTool.ps1 -All -BlockSignIn -Exclude admin@domain.com, support@domain.com
+.\Reset-M365UserAccess.ps1 -UserPrincipalNames user1@domain.com, user2@domain.com -ResetPassword
+.\Reset-M365UserAccess.ps1 -All -DisableDevices -SignOut
+.\Reset-M365UserAccess.ps1 -All -BlockSignIn -Exclude admin@domain.com, support@domain.com
 ```
 
 ---
@@ -128,6 +128,6 @@ This skill and every script it generates are provided as-is with no warranty of 
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/mabdulkadrx)
 
-Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin-skill)
+Built with [**PowerShell Enterprise Admin**](https://github.com/mabdulkadr/powershell-enterprise-admin)
 
 </div>
